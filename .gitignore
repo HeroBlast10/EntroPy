@@ -15,6 +15,7 @@ data/backtest/
 data/portfolio/
 data/factors/
 data/reports/
+data/live/
 
 # Keep the data directory structure
 !data/.gitkeep

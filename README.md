@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-*Data → Factors → Portfolio → Execution → Report — five CLI commands, one HTML research report.*
+*Data → Factors → Portfolio → Execution → Report → Live Trading — six layers, from research to paper trading.*
 
 </div>
 
@@ -18,11 +18,11 @@
 
 EntroPy is an **end-to-end quantitative research pipeline** that takes raw
 price data and produces a publication-quality backtest report — complete with
-walk-forward validation, cost attribution, and ablation studies.
+walk-forward validation, cost attribution, ablation studies, and an **IB paper-trading demo**.
 
 ```
-build_dataset → build_factors → build_portfolio → run_backtest → generate_report
-     (data)        (24 alphas)      (weights)       (trades+PnL)     (HTML report)
+build_dataset → build_factors → build_portfolio → run_backtest → generate_report → paper_trade
+     (data)        (24 alphas)      (weights)       (trades+PnL)     (HTML report)    (IB live)
 ```
 
 **Key differentiators:**
@@ -33,6 +33,8 @@ build_dataset → build_factors → build_portfolio → run_backtest → generat
   SEC/FINRA fees, borrow cost — all separately parameterised
 - **Robustness-first** — walk-forward OOS validation, multi-scenario cost ablation,
   factor crowding diagnostics
+- **Research-to-live** — IB paper-trading integration with real-time data,
+  risk-gated order flow, position tracking, and structured logging
 
 ## Quick Start
 
@@ -97,6 +99,15 @@ EntroPy/
 │   │   ├── ablation.py           #   Cost / neutralize / universe sensitivity
 │   │   └── report.py             #   Self-contained HTML report generator
 │   │
+│   ├── live/                     # Step 6 — IB Paper Trading
+│   │   ├── config.py             #   IBConfig, RiskLimits, StrategyConfig
+│   │   ├── gateway.py            #   IB connection lifecycle (connect/reconnect/shutdown)
+│   │   ├── market_data.py        #   Real-time quotes, bars, tick subscriptions
+│   │   ├── execution.py          #   Risk-gated order placement, fill tracking
+│   │   ├── risk.py               #   Pre-trade checks, kill switch, session limits
+│   │   ├── portfolio.py          #   Live position & PnL tracking, rebalance diff
+│   │   └── strategy.py           #   Signal → target weights → orders loop
+│   │
 │   └── utils/io.py               # Config loader, Parquet I/O
 │
 ├── scripts/                      # CLI entry points (one per step)
@@ -108,7 +119,7 @@ EntroPy/
 └── requirements.txt
 ```
 
-## The Five Layers
+## The Six Layers
 
 ### 1. Data Layer
 
@@ -173,6 +184,55 @@ Auto-generated self-contained HTML with **10 sections**:
 | 9 | Walk-Forward | "Is this overfit?" — OOS Sharpe per fold |
 | 10 | Ablation | Cost sensitivity: zero → low → high |
 
+### 6. Live Trading (IB Paper)
+
+Connect to IB TWS / Gateway **paper account** for real-time market data and
+simulated execution with full risk controls.
+
+| Module | Responsibility |
+|--------|----------------|
+| `gateway.py` | Connection lifecycle, account info, auto-reconnect |
+| `market_data.py` | Streaming quotes, snapshots, historical bars |
+| `execution.py` | MKT / LMT / Adaptive orders, fill callbacks, fill log |
+| `risk.py` | Kill switch, per-order / position / session limits |
+| `portfolio.py` | Live positions, rebalance diff (target vs actual) |
+| `strategy.py` | Main loop: data → signal → rebalance → submit → log |
+
+**Risk controls (all toggleable):**
+
+| Check | Default |
+|-------|---------|
+| Kill switch | Off (instant halt) |
+| Max order notional | $50k |
+| Max position count | 20 |
+| Max daily loss | $10k (auto kill-switch) |
+| Max daily trades | 200 |
+| Max daily notional | $1M cumulative |
+
+```bash
+# Prerequisites: IB TWS or Gateway running in paper mode (port 7497)
+
+# Default: 5 tickers, MKT orders, 5-min rebalance
+python scripts/paper_trade.py
+
+# Custom tickers, faster cycle
+python scripts/paper_trade.py -t AAPL -t MSFT -t NVDA --interval 60
+
+# Dry run (log orders, don't submit)
+python scripts/paper_trade.py --dry-run
+
+# Limit orders with 10 bps offset
+python scripts/paper_trade.py --order-type LMT --limit-offset 10
+
+# Single cycle then exit
+python scripts/paper_trade.py --run-once
+
+# Strict risk
+python scripts/paper_trade.py --max-order-notional 10000 --max-daily-loss 5000
+```
+
+Outputs: `data/live/logs/` (JSONL cycle logs + fill logs) · `data/live/state/` (session snapshots)
+
 ## Tests
 
 ```bash
@@ -198,7 +258,7 @@ date range, universe filters, adjustment method, publication lag, git tagging.
 
 ## Tech Stack
 
-`pandas` · `pyarrow` · `numpy` · `scipy` · `matplotlib` · `yfinance` · `simfin` · `exchange_calendars` · `loguru` · `click` · `xxhash`
+`pandas` · `pyarrow` · `numpy` · `scipy` · `matplotlib` · `yfinance` · `simfin` · `exchange_calendars` · `ib_insync` · `loguru` · `click` · `xxhash`
 
 ## License
 

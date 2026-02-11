@@ -2,6 +2,20 @@
 
 All notable changes to EntroPy are documented in this file.
 
+## [0.6.0] — 2026-02-11
+
+### Added — IB Paper Trading (Step 7)
+- `entropy/live/config.py` — `IBConfig`, `RiskLimits`, `StrategyConfig`, `PaperTradingConfig` dataclasses with all tuneable knobs
+- `entropy/live/gateway.py` — IB TWS/Gateway connection manager with auto-reconnect, structured logging, context manager support
+- `entropy/live/market_data.py` — real-time streaming quotes, snapshots, historical bars via `ib_insync`
+- `entropy/live/execution.py` — risk-gated `OrderManager` supporting MKT / LMT / Adaptive orders, fill callbacks, fill log persistence
+- `entropy/live/risk.py` — `RiskManager` with kill switch, per-order limits (notional, shares), position limits, session limits (daily loss auto-kill, trade count, cumulative notional)
+- `entropy/live/portfolio.py` — live position tracking, target-vs-actual rebalance diff computation, account PnL queries
+- `entropy/live/strategy.py` — `PaperTradingStrategy` main loop: subscribe → snapshot → signal → rebalance → submit → log → sleep → repeat
+- `scripts/paper_trade.py` — full CLI with `--dry-run`, `--kill-switch`, `--order-type`, `--max-daily-loss`, `--run-once`, etc.
+- Structured logging: JSONL cycle logs (`data/live/logs/`) + session state snapshots (`data/live/state/`)
+- Added `ib_insync>=0.9.86` to requirements.txt
+
 ## [0.5.0] — 2026-02-11
 
 ### Added — Engineering Polish (Step 6)
