@@ -1,0 +1,59 @@
+# ============================================================
+# EntroPy Data Layer Configuration
+# ============================================================
+
+# --- Paths ---
+paths:
+  data_root: "data"                # relative to project root
+  prices_dir: "prices"
+  universe_dir: "universe"
+  fundamentals_dir: "fundamentals"
+  manifest_file: "manifest.json"
+
+# --- Date Range ---
+date_range:
+  start: "2010-01-01"
+  end: "2024-12-31"
+
+# --- Exchange / Calendar ---
+exchange:
+  calendar: "XNYS"                # NYSE calendar (covers NASDAQ hours too)
+  currency: "USD"
+
+# --- Universe Filters ---
+universe:
+  min_listing_days: 60             # exclude stocks listed < N trading days
+  min_price: 1.0                   # exclude penny stocks (close < $1)
+  min_market_cap: 5.0e+7           # $50M minimum market cap
+  exclude_otc: true                # exclude OTC / pink sheets
+  # Primary universe source: S&P 500 constituents as of each rebalance
+  # Expandable to Russell 1000/3000
+  index_membership: "sp500"
+
+# --- Adjustment Factor ---
+adjustment:
+  # "split_only" = only adjust for splits (no dividend reinvestment)
+  # "total_return" = adjust for splits + dividends
+  method: "split_only"
+  # point_in_time: use the adjustment factor known AS OF each date
+  # (avoids look-ahead bias from retroactive corrections)
+  point_in_time: true
+
+# --- Fundamental Data ---
+fundamentals:
+  # SimFin dataset variant: "free" or "plus"
+  simfin_variant: "free"
+  # API key (set via env var SIMFIN_API_KEY or paste here for local use)
+  simfin_api_key: null
+  # Which statements to pull
+  statements:
+    - "income"
+    - "balance"
+    - "cashflow"
+  # Lag (calendar days) to apply after report_date to avoid look-ahead bias
+  publication_lag_days: 45
+
+# --- Data Versioning ---
+versioning:
+  auto_tag: true                   # create git tag on each build
+  tag_prefix: "data-v"

@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Data outputs (large Parquet files — tracked via manifest, not git)
+data/*.parquet
+data/**/*.parquet
+data/**/*.csv
+data/manifest.json
+data/backtest/
+data/portfolio/
+data/factors/
+data/reports/
+
+# Keep the data directory structure
+!data/.gitkeep
+
+# SimFin cache
+simfin_data/
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+*.env
+venv/
+.venv/
