@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from entropy.trading.costs import (
+from quant_platform.core.execution.cost_models.us_equity import (
     CostModel,
     daily_borrow_cost,
     estimate_batch_costs,

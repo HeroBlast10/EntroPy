@@ -1,4 +1,4 @@
-# EntroPy - Multi-Factor Backtest Framework
+# EntroPy - Multi-Market Quant Research & Paper-Trading Platform
 
 # --- Core ---
 pandas>=2.0.0
@@ -7,15 +7,26 @@ numpy>=1.24.0
 scipy>=1.11.0
 pyyaml>=6.0
 
-# --- Market Data ---
+# --- Market Data (US) ---
 yfinance>=0.2.31
 exchange_calendars>=4.5
+
+# --- Market Data (CN A-share, optional) ---
+baostock>=0.8.8
+# tushare>=1.4.0          # uncomment if you have a Tushare Pro token
 
 # --- Fundamentals (SEC EDGAR / simfin) ---
 simfin>=0.9.2
 
+# --- Numba (JIT kernels for Kalman, HMM, OU, signal processing) ---
+numba>=0.59.0
+
 # --- Visualization ---
 matplotlib>=3.7.0
+plotly>=5.18.0
+
+# --- Interactive Dashboard ---
+streamlit>=1.30.0
 
 # --- Live Trading (IB paper) ---
 ib_insync>=0.9.86

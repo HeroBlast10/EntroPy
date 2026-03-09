@@ -1,0 +1,95 @@
+# ============================================================
+# Experiment: US Signal Lab (Hero Experiment)
+# ============================================================
+# Core question: Do state-space / regime / entropy features provide
+# verifiable incremental value over standard cross-sectional factors?
+
+experiment:
+  name: "us_signal_lab"
+  description: >
+    Hero experiment: baseline CS factors + advanced TS/regime features.
+    Walk-forward OOS validation with cost stress test and regime-split ablation.
+
+data:
+  start: "2010-01-01"
+  end: "2024-12-31"
+  universe: "sp500"
+  exchange: "XNYS"
+
+# --- Baseline: standard CS factors ---
+baseline:
+  factors: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD"]
+  portfolio:
+    method: "quantile"
+    mode: "long_short"
+    sector_neutral: true
+    rebalance_freq: "M"
+    n_quantiles: 5
+
+# --- Advanced features: state-space / regime / entropy ---
+advanced_features:
+  kalman:
+    - "KF_VELOCITY"
+    - "KF_TREND_STRENGTH"
+  noise:
+    - "SPECTRAL_ENTROPY_60D"
+    - "HURST_60D"
+  higher_moments:
+    - "ROLLING_SKEW_60D"
+    - "ROLLING_KURT_60D"
+  regime_overlay: "HMM_TURBULENCE_PROB"
+
+# --- Alpha model ---
+alpha_model:
+  type: "ensemble"
+  w_cs: 0.6
+  w_ts: 0.4
+  regime_overlay:
+    turbulence_threshold: 0.6
+    reduction_factor: 0.5
+
+# --- Cost models for stress testing ---
+costs:
+  model: "us_equity"
+  slippage_bps: 5.0
+  impact_coeff: 0.1
+
+# --- Evaluation ---
+evaluation:
+  walkforward:
+    train_months: 36
+    test_months: 12
+    step_months: 12
+
+  ablation_scenarios:
+    - name: "baseline_only"
+      factors: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD"]
+      regime_overlay: false
+
+    - name: "baseline_plus_kalman"
+      factors: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD",
+                "KF_VELOCITY", "KF_TREND_STRENGTH"]
+      regime_overlay: false
+
+    - name: "baseline_plus_noise"
+      factors: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD",
+                "SPECTRAL_ENTROPY_60D", "HURST_60D"]
+      regime_overlay: false
+
+    - name: "baseline_plus_regime_overlay"
+      factors: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD"]
+      regime_overlay: true
+
+    - name: "full_ensemble"
+      factors: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD",
+                "KF_VELOCITY", "KF_TREND_STRENGTH",
+                "SPECTRAL_ENTROPY_60D", "HURST_60D",
+                "ROLLING_SKEW_60D", "ROLLING_KURT_60D"]
+      regime_overlay: true
+
+  cost_stress_bps: [0, 5, 10, 20]
+  regime_split: true
+
+# --- Key question ---
+# Do advanced features improve IC / net Sharpe / drawdown / turnover-adjusted
+# performance? If not, in which regimes do they help?

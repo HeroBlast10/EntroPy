@@ -1,0 +1,45 @@
+# ============================================================
+# Experiment: US Baseline
+# ============================================================
+# Standard cross-sectional multi-factor portfolio.
+# Use as the control group for ablation studies.
+
+experiment:
+  name: "us_baseline"
+  description: "Standard CS factors (momentum + volatility + liquidity), long-only quintile, monthly rebalance"
+
+data:
+  start: "2010-01-01"
+  end: "2024-12-31"
+  universe: "sp500"
+  exchange: "XNYS"
+
+factors:
+  signal_type: "cross_sectional"
+  names: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD"]
+  winsorize: [0.01, 0.99]
+  zscore: true
+  neutralize: null
+
+portfolio:
+  method: "quantile"
+  mode: "long_only"
+  weight_scheme: "equal"
+  rebalance_freq: "M"
+  n_quantiles: 5
+  long_quantile: 5
+  max_stock_weight: 0.05
+  max_sector_weight: 0.30
+
+costs:
+  model: "us_equity"
+  slippage_bps: 5.0
+  impact_coeff: 0.1
+  impact_exponent: 0.5
+  commission_per_share: 0.005
+
+evaluation:
+  walkforward:
+    train_months: 36
+    test_months: 12
+    step_months: 12

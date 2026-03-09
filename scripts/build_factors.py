@@ -28,7 +28,7 @@ import click
 import pandas as pd
 from loguru import logger
 
-from entropy.utils.io import set_project_root
+from quant_platform.core.utils.io import set_project_root
 
 logger.remove()
 logger.add(sys.stderr, level="INFO", format=(
@@ -52,7 +52,7 @@ def main(factors, evaluate, list_factors, periods):
     """EntroPy — Compute and evaluate alpha factors."""
     set_project_root(_project_root)
 
-    from entropy.factors.registry import FactorRegistry
+    from quant_platform.core.signals.registry import FactorRegistry
 
     reg = FactorRegistry()
     reg.discover()
@@ -64,7 +64,7 @@ def main(factors, evaluate, list_factors, periods):
         return
 
     # --- Load prices ---
-    from entropy.utils.io import load_config, resolve_data_path, load_parquet
+    from quant_platform.core.utils.io import load_config, resolve_data_path, load_parquet
 
     cfg = load_config()
     prices_path = resolve_data_path(cfg["paths"]["prices_dir"], "prices.parquet")
@@ -83,7 +83,7 @@ def main(factors, evaluate, list_factors, periods):
 
     # --- Evaluate ---
     if evaluate:
-        from entropy.factors.evaluation import (
+        from quant_platform.core.signals.cross_sectional.evaluation import (
             add_forward_returns,
             compare_factors,
             factor_tearsheet,

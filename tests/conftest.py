@@ -13,7 +13,7 @@ import pytest
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
 
-from entropy.utils.io import set_project_root
+from quant_platform.core.utils.io import set_project_root
 set_project_root(_root)
 
 

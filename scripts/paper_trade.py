@@ -44,7 +44,7 @@ sys.path.insert(0, str(_project_root))
 import click
 from loguru import logger
 
-from entropy.utils.io import set_project_root
+from quant_platform.core.utils.io import set_project_root
 
 # Configure logger
 logger.remove()
@@ -103,10 +103,10 @@ def main(
     """
     set_project_root(_project_root)
 
-    from entropy.live.config import (
+    from quant_platform.core.execution.paper.ibkr.config import (
         IBConfig, PaperTradingConfig, RiskLimits, StrategyConfig,
     )
-    from entropy.live.strategy import PaperTradingStrategy
+    from quant_platform.core.execution.paper.ibkr.strategy import PaperTradingStrategy
 
     # Build config from CLI args
     ib_cfg = IBConfig(
@@ -162,13 +162,13 @@ def main(
         try:
             strategy.gateway.connect()
             strategy.md = __import__(
-                "entropy.live.market_data", fromlist=["MarketDataManager"]
+                "quant_platform.core.execution.paper.ibkr.market_data", fromlist=["MarketDataManager"]
             ).MarketDataManager(strategy.gateway)
             strategy.orders = __import__(
-                "entropy.live.execution", fromlist=["OrderManager"]
+                "quant_platform.core.execution.paper.ibkr.execution", fromlist=["OrderManager"]
             ).OrderManager(strategy.gateway, strategy.risk_mgr, config)
             strategy.portfolio = __import__(
-                "entropy.live.portfolio", fromlist=["PortfolioTracker"]
+                "quant_platform.core.execution.paper.ibkr.portfolio", fromlist=["PortfolioTracker"]
             ).PortfolioTracker(strategy.gateway)
 
             strategy.md.subscribe(config.strategy.tickers)

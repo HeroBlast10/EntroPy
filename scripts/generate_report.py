@@ -30,7 +30,7 @@ sys.path.insert(0, str(_project_root))
 import click
 from loguru import logger
 
-from entropy.utils.io import set_project_root
+from quant_platform.core.utils.io import set_project_root
 
 logger.remove()
 logger.add(sys.stderr, level="INFO", format=(
@@ -60,7 +60,7 @@ def main(signal, output, no_walkforward, no_ablation, wf_train, wf_test, wf_step
     """EntroPy — Generate HTML research report."""
     set_project_root(_project_root)
 
-    from entropy.evaluation.report import generate_report
+    from quant_platform.core.evaluation.report import generate_report
 
     wf_kwargs = {
         "train_months": wf_train,

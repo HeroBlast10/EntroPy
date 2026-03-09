@@ -1,0 +1,84 @@
+# ============================================================
+# Experiment: CN A-Share Signal Lab
+# ============================================================
+# Apply state-space / regime / entropy signals to A-share market
+# under realistic T+1, ST, price-limit, and suspension constraints.
+
+experiment:
+  name: "cn_signal_lab"
+  description: >
+    A-share signal lab: Kalman + entropy + HMM features on CN equities
+    with realistic execution constraints (T+1, lot size, price limits).
+
+data:
+  start: "2018-01-01"
+  end: "2024-12-31"
+  universe: "csi300"
+  exchange: "XSHG"
+
+# --- Baseline: adapted CS factors for A-shares ---
+baseline:
+  factors: ["MOM_12_1M", "VOL_20D"]
+  portfolio:
+    method: "quantile"
+    mode: "long_only"
+    rebalance_freq: "W"
+    n_quantiles: 5
+    top_n: 30
+
+# --- Advanced features ---
+advanced_features:
+  kalman:
+    - "KF_VELOCITY"
+    - "KF_TREND_STRENGTH"
+  noise:
+    - "SPECTRAL_ENTROPY_60D"
+    - "HURST_60D"
+  higher_moments:
+    - "ROLLING_SKEW_60D"
+    - "ROLLING_KURT_60D"
+  regime_overlay: "HMM_TURBULENCE_PROB"
+
+# --- Execution constraints (A-share specific) ---
+execution:
+  signal_lag: 1          # T+1 settlement
+  skip_limit_up: true
+  skip_limit_down: true
+  skip_suspended: true
+  skip_st: true
+  skip_new_listing: true
+  enforce_lot_size: false  # optional
+
+# --- Cost model ---
+costs:
+  model: "cn_a_share"
+  commission_rate: 0.0003
+  stamp_tax_rate: 0.0005
+  slippage_bps: 5.0
+  slippage_model: "fixed"
+
+# --- Evaluation ---
+evaluation:
+  walkforward:
+    train_months: 24
+    test_months: 6
+    step_months: 6
+
+  ablation_scenarios:
+    - name: "baseline_only"
+      factors: ["MOM_12_1M", "VOL_20D"]
+      regime_overlay: false
+
+    - name: "baseline_plus_kalman"
+      factors: ["MOM_12_1M", "VOL_20D", "KF_VELOCITY", "KF_TREND_STRENGTH"]
+      regime_overlay: false
+
+    - name: "full_ensemble"
+      factors: ["MOM_12_1M", "VOL_20D",
+                "KF_VELOCITY", "KF_TREND_STRENGTH",
+                "SPECTRAL_ENTROPY_60D", "HURST_60D",
+                "ROLLING_SKEW_60D", "ROLLING_KURT_60D"]
+      regime_overlay: true
+
+  cost_stress_bps: [0, 5, 10, 20]
+  regime_split: true

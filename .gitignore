@@ -23,6 +23,10 @@ data/live/
 # SimFin cache
 simfin_data/
 
+# Numba JIT cache
+*.nbi
+*.nbc
+
 # Pytest
 .pytest_cache/
 htmlcov/

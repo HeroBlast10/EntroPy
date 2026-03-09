@@ -28,7 +28,7 @@ logger.add(sys.stderr, level="INFO", format=(
     "<green>{time:HH:mm:ss}</green> | <level>{level:<8}</level> | <level>{message}</level>"
 ))
 
-from entropy.utils.io import set_project_root, load_config
+from quant_platform.core.utils.io import set_project_root, load_config
 set_project_root(_root)
 
 
@@ -45,19 +45,19 @@ def main():
 
     # ── Step 1: Data ────────────────────────────────────────────────
     print("\n▸ Step 1/5: Downloading price data...")
-    from entropy.data.prices import build_prices
+    from quant_platform.core.data.prices import build_prices
     prices_path = build_prices(tickers=TICKERS, start=START, end=END)
     print(f"  ✓ Prices saved → {prices_path}")
 
     # ── Step 2: Factors ─────────────────────────────────────────────
     print("\n▸ Step 2/5: Computing factors...")
-    from entropy.utils.io import load_parquet
+    from quant_platform.core.utils.io import load_parquet
     import pandas as pd
 
     prices = load_parquet(prices_path)
     prices["date"] = pd.to_datetime(prices["date"])
 
-    from entropy.factors.registry import FactorRegistry
+    from quant_platform.core.signals.registry import FactorRegistry
     reg = FactorRegistry()
     reg.discover()
 
@@ -70,10 +70,10 @@ def main():
 
     # ── Step 3: Portfolio ───────────────────────────────────────────
     print("\n▸ Step 3/5: Building portfolio...")
-    from entropy.portfolio.construction import PortfolioConfig, PortfolioMode, WeightScheme
-    from entropy.portfolio.quantile import QuantilePortfolio
-    from entropy.portfolio.rebalance import rebalance_dates, carry_forward_weights
-    from entropy.data.calendar import trading_dates
+    from quant_platform.core.portfolio.construction import PortfolioConfig, PortfolioMode, WeightScheme
+    from quant_platform.core.portfolio.quantile import QuantilePortfolio
+    from quant_platform.core.portfolio.rebalance import rebalance_dates, carry_forward_weights
+    from quant_platform.core.data.calendar import trading_dates
 
     # Use all tickers as tradable universe
     universe = prices[["date", "ticker"]].drop_duplicates().copy()
@@ -97,16 +97,16 @@ def main():
                               end=str(weights["date"].max().date()))
     daily_weights = carry_forward_weights(weights, all_dates)
 
-    from entropy.utils.io import resolve_data_path, save_parquet
+    from quant_platform.core.utils.io import resolve_data_path, save_parquet
     wpath = resolve_data_path("portfolio", "weights_quickstart.parquet")
     save_parquet(daily_weights, wpath)
     print(f"  ✓ Portfolio weights saved → {wpath}")
 
     # ── Step 4: Backtest ────────────────────────────────────────────
     print("\n▸ Step 4/5: Simulating execution...")
-    from entropy.trading.costs import CostModel
-    from entropy.trading.execution import simulate_execution
-    from entropy.trading.pnl import compute_daily_returns, performance_summary
+    from quant_platform.core.execution.cost_models.us_equity import CostModel
+    from quant_platform.core.execution.backtest.vectorized_daily import simulate_execution
+    from quant_platform.core.execution.backtest.pnl import compute_daily_returns, performance_summary
 
     cm = CostModel()
     trades = simulate_execution(daily_weights, prices, cm, initial_capital=1_000_000)
@@ -127,7 +127,7 @@ def main():
 
     # ── Step 5: Report ──────────────────────────────────────────────
     print("\n▸ Step 5/5: Generating research report...")
-    from entropy.evaluation.report import generate_report
+    from quant_platform.core.evaluation.report import generate_report
     report_path = generate_report(
         signal_col="MOM_12_1M",
         run_walkforward=False,   # skip for speed

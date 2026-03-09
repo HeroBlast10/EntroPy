@@ -1,0 +1,1 @@
+"""Market-specific data adapters."""

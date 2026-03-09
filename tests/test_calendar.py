@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from entropy.data.calendar import (
+from quant_platform.core.data.calendar import (
     align_to_calendar,
     is_trading_day,
     next_trading_day,

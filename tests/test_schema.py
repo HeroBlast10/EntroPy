@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from entropy.data.schema import PRICES_SCHEMA, validate_dataframe
+from quant_platform.core.data.schema import PRICES_SCHEMA, validate_dataframe
 
 
 class TestValidateDataframe:

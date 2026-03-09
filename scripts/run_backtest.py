@@ -28,7 +28,7 @@ sys.path.insert(0, str(_project_root))
 import click
 from loguru import logger
 
-from entropy.utils.io import set_project_root
+from quant_platform.core.utils.io import set_project_root
 
 logger.remove()
 logger.add(sys.stderr, level="INFO", format=(
@@ -63,8 +63,8 @@ def main(weights, capital, slippage_bps, impact_coeff, impact_exponent,
     """EntroPy — Run backtest simulation with transaction costs."""
     set_project_root(_project_root)
 
-    from entropy.trading.costs import CostModel
-    from entropy.trading.pipeline import run_trading_pipeline
+    from quant_platform.core.execution.cost_models.us_equity import CostModel
+    from quant_platform.core.execution.backtest.pipeline import run_trading_pipeline
 
     cost_model = CostModel(
         slippage_bps=slippage_bps,

@@ -28,7 +28,7 @@ sys.path.insert(0, str(_project_root))
 import click
 from loguru import logger
 
-from entropy.utils.io import set_project_root
+from quant_platform.core.utils.io import set_project_root
 
 # Configure loguru
 logger.remove()
@@ -55,11 +55,11 @@ def main(steps, start, end, tickers, verify):
     set_project_root(_project_root)
 
     if verify:
-        from entropy.data.manifest import verify_manifest
+        from quant_platform.core.data.manifest import verify_manifest
         ok = verify_manifest()
         sys.exit(0 if ok else 1)
 
-    from entropy.data.pipeline import run_pipeline
+    from quant_platform.core.data.pipeline import run_pipeline
 
     step_list = list(steps) if steps else None
     ticker_list = [t.strip() for t in tickers.split(",")] if tickers else None

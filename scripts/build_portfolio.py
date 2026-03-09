@@ -31,7 +31,7 @@ import click
 import pandas as pd
 from loguru import logger
 
-from entropy.utils.io import set_project_root
+from quant_platform.core.utils.io import set_project_root
 
 logger.remove()
 logger.add(sys.stderr, level="INFO", format=(
@@ -69,8 +69,8 @@ def main(method, signal, mode, weight, freq, n_quantiles, top_n,
     """EntroPy — Build portfolio weights from factor signals."""
     set_project_root(_project_root)
 
-    from entropy.portfolio.construction import PortfolioConfig, PortfolioMode, WeightScheme
-    from entropy.portfolio.pipeline import run_portfolio_pipeline
+    from quant_platform.core.portfolio.construction import PortfolioConfig, PortfolioMode, WeightScheme
+    from quant_platform.core.portfolio.pipeline import run_portfolio_pipeline
 
     config = PortfolioConfig(
         mode=PortfolioMode(mode),

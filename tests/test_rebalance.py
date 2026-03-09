@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from entropy.portfolio.rebalance import carry_forward_weights, rebalance_dates
+from quant_platform.core.portfolio.rebalance import carry_forward_weights, rebalance_dates
 
 
 class TestRebalanceDates:
@@ -34,7 +34,7 @@ class TestRebalanceDates:
 
 class TestCarryForward:
     def test_fills_between_rebalances(self):
-        from entropy.data.calendar import trading_dates
+        from quant_platform.core.data.calendar import trading_dates
         all_dates = trading_dates("2023-01-01", "2023-03-31")
         reb = rebalance_dates("M", "2023-01-01", "2023-03-31")
 

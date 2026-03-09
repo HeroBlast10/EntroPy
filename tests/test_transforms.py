@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from entropy.factors.transforms import (
+from quant_platform.core.signals.transforms import (
     apply_lag,
     cross_sectional_rank,
     cross_sectional_zscore,
