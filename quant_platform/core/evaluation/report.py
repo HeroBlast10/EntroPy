@@ -23,6 +23,7 @@ import base64
 import io
 import datetime as dt
 from pathlib import Path
+import os
 from typing import Dict, List, Optional
 
 import matplotlib
@@ -476,7 +477,14 @@ def generate_report(
 
     # Save
     if output_path is None:
-        output_path = resolve_data_path("reports", "research_report.html")
+        # If a specific signal is provided, include it in the default filename
+        if signal_col:
+            # Make sure the factor name is filesystem-safe
+            safe_signal = str(signal_col).replace(os.sep, "_").replace(" ", "_")
+            filename = f"research_report_{safe_signal}.html"
+        else:
+            filename = "research_report.html"
+        output_path = resolve_data_path("reports", filename)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")

@@ -76,7 +76,7 @@ quant_platform/
 ```bash
 pip install -r requirements.txt
 
-# Full US equity pipeline
+# Full US equity pipeline (manual, step-by-step)
 python scripts/build_dataset.py          # 1. Download & align price data
 python scripts/build_factors.py --evaluate  # 2. Compute & evaluate all signals → factor_comparison.csv
 python scripts/build_portfolio.py        # 3. Build portfolio weights
@@ -89,6 +89,11 @@ python scripts/tune_factors.py --objective ric_icir --top 5
 
 # Interactive dashboard
 streamlit run quant_platform/apps/dashboard/app.py
+
+# One-command factor research pipeline (compute → portfolio → backtest → report)
+python scripts/run_factor_pipeline.py --factors MOM_12_1M              # Single factor
+python scripts/run_factor_pipeline.py --factors MOM_12_1M VOL_20D      # Multiple factors
+python scripts/run_factor_pipeline.py --all-factors --quick            # All factors (fast scan)
 ```
 
 ## Signal Library
@@ -178,14 +183,46 @@ See: `quant_platform/experiments/us_signal_lab.yaml`
 | Transfer Fee | Bilateral | 0.1 bps |
 | Slippage | Fixed / volume / volatility | 5 bps |
 
-## Research Report
+## End-to-End Factor Research Pipeline 🚀
 
-Auto-generated self-contained HTML with **11 sections**: executive summary, **all-factor comparison table** (with auto-best selection), NAV & drawdown, monthly heatmap, rolling Sharpe, turnover, IC/RankIC for selected factor, factor correlation, cost attribution, walk-forward OOS, ablation.
+**One-command solution** to generate complete research reports for any factor(s):
 
-**New features:**
-- `--auto-best` flag: automatically selects the top-ranked factor from `factor_comparison.csv`
-- `--optimize-by ric_mean_ic | ric_icir | ls_sharpe`: choose ranking metric
-- Section 2 displays full factor comparison table with metrics for all computed factors
+```bash
+# Generate report for single factor (full pipeline: compute → portfolio → backtest → report)
+python scripts/run_factor_pipeline.py --factors MOM_12_1M
+
+# Generate reports for multiple factors
+python scripts/run_factor_pipeline.py --factors MOM_12_1M VOL_20D ILLIQ_AMIHUD
+
+# Generate reports for ALL factors (quick mode recommended)
+python scripts/run_factor_pipeline.py --all-factors --quick
+
+# List available factors
+python scripts/run_factor_pipeline.py --list
+
+# Auto-select and generate report for best factor
+python scripts/run_factor_pipeline.py --auto-best --optimize-by ls_sharpe
+```
+
+**What it does:**
+1. ✅ Computes factors & generates `factor_comparison.csv`
+2. ✅ Builds portfolio weights
+3. ✅ Runs backtest simulation
+4. ✅ Generates complete HTML research report
+
+**Output:** Self-contained HTML with **12 sections** including executive summary, **all-factor comparison table**, NAV & drawdown, monthly heatmap, rolling Sharpe, turnover, IC/RankIC, factor correlation, cost attribution, walk-forward OOS, and ablation study.
+
+### Manual Step-by-Step Workflow (Alternative)
+
+If you prefer to run each step manually:
+
+```bash
+python scripts/build_dataset.py                 # 1. Build prices dataset
+python scripts/build_factors.py --evaluate      # 2. Compute & evaluate factors → factor_comparison.csv
+python scripts/build_portfolio.py --signal MOM_12_1M  # 3. Construct portfolio for a chosen factor
+python scripts/run_backtest.py                  # 4. Run cost-aware backtest
+python scripts/generate_report.py --factors MOM_12_1M  # 5. Generate HTML report(s) for selected factor(s)
+```
 
 ## IB Paper Trading
 

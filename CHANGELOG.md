@@ -8,6 +8,7 @@ All notable changes to EntroPy are documented in this file.
 - `quant_platform/core/evaluation/report.py` — new Section 2 "Factor Comparison (All Factors)" that reads `data/factors/factor_comparison.csv` and renders a full comparison table; renumbered existing sections 2‑10 → 3‑11
 - `select_best_factor(comparison, metric="ric_mean_ic")` helper that ranks factors by any metric (ric_mean_ic, ric_icir, ls_sharpe, …) and returns the winner
 - `scripts/generate_report.py` — added `--auto-best` flag and `--optimize-by` option; when `--auto-best` is set the CLI reads factor_comparison.csv, calls `select_best_factor()`, and passes the winner as `signal_col`
+- `scripts/generate_report.py` — extended CLI to support multi-factor batch reporting: `--factors` now accepts 1‑N factor names, `--all-factors` generates reports for every row in `factor_comparison.csv`, `--list` prints a ranked table of available factors, and `--output-dir` controls the destination directory for multiple HTML reports
 
 ### Added — Factor Parameter Overrides & Registry Support
 - `quant_platform/core/signals/base.py` — `FactorBase.__init__(**param_overrides)`; meta-field keys (lookback, lag, …) replace the frozen FactorMeta via `dataclasses.replace`; all other keys land in `self._extra_params` for `_compute()` to consume; `compute()` now uses `self._meta` throughout
@@ -17,6 +18,11 @@ All notable changes to EntroPy are documented in this file.
 ### Added — Grid‑Search Auto‑Tuner
 - `scripts/tune_factors.py` (new) — grid‑search CLI that iterates the cartesian product of `period`/`window` × `lag` search space for each factor, evaluates `ric_mean_ic`, `ric_icir`, and `ls_sharpe`, saves `data/factors/tune_results.csv`, and prints top‑N results per factor and the overall best configuration
 - Default search space covers all 7 momentum factors with practical period/lag ranges; supports custom objective (`--objective ric_mean_ic | ric_icir | ls_sharpe`), factor subset (`--factors`), and result count (`--top`)
+
+### Added — End-to-End Factor Research Pipeline
+- `scripts/run_factor_pipeline.py` (new) — orchestrates the full research loop (factor computation → `factor_comparison.csv` evaluation → portfolio construction → cost-aware backtest → HTML research report) behind a single CLI
+- Pipeline supports single, multiple, or all factors via `--factors`, `--all-factors`, and `--auto-best` flags, plus `--quick` mode (skips walk-forward and ablation), `--skip-factor-compute`, and portfolio configuration options (`--mode`, `--freq`, `--method`, `--max-stock-weight`, `--max-sector-weight`, `--capital`)
+- Batch runs produce one report per factor (e.g. `data/reports/report_MOM_12_1M.html`) and summarise results in a Sharpe‑sorted leaderboard at the end of the run
 
 ## [0.6.0] — 2026-02-11
 
