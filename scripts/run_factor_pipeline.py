@@ -1,17 +1,23 @@
 #!/usr/bin/env python
-"""End-to-end factor research pipeline: from factor computation to HTML report.
+"""End-to-end factor research pipeline: portfolio → backtest → report.
 
-This script orchestrates the full workflow:
-1. Compute factors (if needed)
-2. Evaluate factors and generate factor_comparison.csv (if needed)
-3. Build portfolio weights for each target factor
-4. Run backtest simulation
-5. Generate HTML research report
+PREREQUISITES:
+  1. Run 'python scripts/build_factors.py --evaluate' FIRST to generate:
+     - data/factors/factors.parquet (all computed factors)
+     - data/factors/factor_comparison.csv (evaluation metrics for all factors)
+
+This script orchestrates the research workflow for one or more factors:
+  1. Build portfolio weights for specified factor(s)
+  2. Run backtest simulation
+  3. Generate HTML research report
 
 Usage examples::
 
-    # Generate report for single factor
-    python scripts/run_factor_pipeline.py --factors MOM_12_1M
+    # IMPORTANT: Run this FIRST to compute all factors
+    python scripts/build_factors.py --evaluate
+
+    # Then generate report for single factor
+    python scripts/run_factor_pipeline.py --factors REALIZED_JUMP
 
     # Generate reports for multiple factors
     python scripts/run_factor_pipeline.py --factors MOM_12_1M VOL_20D ILLIQ_AMIHUD
@@ -19,7 +25,7 @@ Usage examples::
     # Generate reports for ALL factors in factor_comparison.csv
     python scripts/run_factor_pipeline.py --all-factors
 
-    # List available factors
+    # List available factors from factor_comparison.csv
     python scripts/run_factor_pipeline.py --list
 
     # Auto-select best factor and generate report
@@ -31,10 +37,7 @@ Usage examples::
     # Custom portfolio settings
     python scripts/run_factor_pipeline.py --factors MOM_12_1M --mode long_short --freq W
 
-    # Skip factor computation (assumes factors already exist)
-    python scripts/run_factor_pipeline.py --factors MOM_12_1M --skip-factor-compute
-
-    # Custom output directory
+    # Custom output directory for multiple reports
     python scripts/run_factor_pipeline.py --factors MOM_12_1M VOL_20D --output-dir reports/batch_2024
 """
 
@@ -73,62 +76,6 @@ def run_step(step_name: str, func, *args, **kwargs):
     except Exception as exc:
         logger.error(f"✗ {step_name} failed: {exc}")
         raise
-
-
-def compute_factors_step(factor_names=None):
-    """Step 1: Compute factors and evaluate."""
-    from quant_platform.core.signals.registry import FactorRegistry
-    from quant_platform.core.utils.io import load_config
-    from quant_platform.core.signals.cross_sectional.evaluation import (
-        add_forward_returns,
-        compare_factors,
-        factor_tearsheet,
-    )
-
-    cfg = load_config()
-    prices_path = resolve_data_path(cfg["paths"]["prices_dir"], "prices.parquet")
-    
-    if not prices_path.exists():
-        logger.error(f"Prices not found at {prices_path}. Run build_dataset.py first.")
-        sys.exit(1)
-
-    prices = load_parquet(prices_path)
-    prices["date"] = pd.to_datetime(prices["date"])
-
-    # Compute factors
-    reg = FactorRegistry()
-    reg.discover()
-    
-    factor_df = reg.compute_all(prices, factor_names=factor_names)
-    out_path = reg.save_factors(factor_df)
-    logger.info(f"Factors saved → {out_path}")
-
-    # Evaluate factors
-    prices_with_fwd = add_forward_returns(prices, periods=[1, 5, 10, 20])
-    eval_df = factor_df.merge(
-        prices_with_fwd[["date", "ticker", "fwd_ret_1d"]],
-        on=["date", "ticker"],
-        how="inner",
-    )
-
-    factor_cols = [c for c in factor_df.columns if c not in ("date", "ticker")]
-    tearsheets = {}
-    for fc in factor_cols:
-        try:
-            ts = factor_tearsheet(eval_df, fc, return_col="fwd_ret_1d")
-            tearsheets[fc] = ts
-        except Exception as exc:
-            logger.error(f"Evaluation failed for {fc}: {exc}")
-
-    if tearsheets:
-        comparison = compare_factors(tearsheets)
-        comp_path = resolve_data_path("factors", "factor_comparison.csv")
-        comp_path.parent.mkdir(parents=True, exist_ok=True)
-        comparison.to_csv(comp_path)
-        logger.info(f"Factor comparison saved → {comp_path}")
-        return comparison
-    
-    return None
 
 
 def build_portfolio_step(signal_col: str, mode: str, freq: str, method: str, 
@@ -216,9 +163,7 @@ def generate_report_step(signal_col: str, output_path, run_walkforward: bool,
 @click.option("--optimize-by", type=str, default="ric_mean_ic",
               help="Metric for ranking when using --auto-best.")
 @click.option("--list", "list_factors", is_flag=True, default=False,
-              help="List available factors and exit.")
-@click.option("--skip-factor-compute", is_flag=True, default=False,
-              help="Skip factor computation (assumes factors & comparison CSV exist).")
+              help="List available factors from factor_comparison.csv and exit.")
 @click.option("--output-dir", type=str, default=None,
               help="Output directory for reports (default: data/reports).")
 @click.option("--quick", is_flag=True, default=False,
@@ -242,12 +187,14 @@ def generate_report_step(signal_col: str, output_path, run_walkforward: bool,
 @click.option("--wf-step", type=int, default=12,
               help="Walk-forward step size (months).")
 def main(factors, all_factors, auto_best, optimize_by, list_factors,
-         skip_factor_compute, output_dir, quick, mode, freq, method,
+         output_dir, quick, mode, freq, method,
          max_stock_weight, max_sector_weight, capital,
          wf_train, wf_test, wf_step):
     """EntroPy — End-to-end factor research pipeline.
     
-    Orchestrates: factor computation → portfolio construction → backtest → report.
+    Orchestrates: portfolio construction → backtest → report.
+    
+    PREREQUISITE: Must run 'python scripts/build_factors.py --evaluate' first!
     """
     set_project_root(_project_root)
 
@@ -262,7 +209,7 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
         if not cmp_path.exists():
             click.echo(
                 f"ERROR: {cmp_path} not found.\n"
-                "Run with --factors or --all-factors to compute and evaluate factors first."
+                "Run 'python scripts/build_factors.py --evaluate' first to compute and evaluate all factors."
             )
             sys.exit(1)
         
@@ -287,48 +234,53 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
         return
 
     # ============================================
+    # Verify prerequisites
+    # ============================================
+    factors_path = resolve_data_path("factors", "factors.parquet")
+    if not factors_path.exists():
+        click.echo(
+            f"\nERROR: {factors_path} not found.\n"
+            "You must run 'python scripts/build_factors.py' first to compute factors."
+        )
+        sys.exit(1)
+    
+    if not cmp_path.exists():
+        click.echo(
+            f"\nERROR: {cmp_path} not found.\n"
+            "You must run 'python scripts/build_factors.py --evaluate' first to evaluate factors."
+        )
+        sys.exit(1)
+
+    # ============================================
     # Determine target factors
     # ============================================
     target_factors = []
+    comparison = pd.read_csv(cmp_path, index_col=0)
     
     if all_factors:
-        if not skip_factor_compute:
-            # Need to compute all factors first
-            click.echo("\n🔧 Computing and evaluating ALL factors...")
-            run_step("1. Compute & Evaluate All Factors", compute_factors_step)
-        
-        if not cmp_path.exists():
-            click.echo(f"ERROR: {cmp_path} not found after computation.")
-            sys.exit(1)
-        
-        comparison = pd.read_csv(cmp_path, index_col=0)
         target_factors = [f for f in comparison.index if pd.notna(comparison.loc[f, "ric_mean_ic"])]
         click.echo(f"\n📊 Pipeline will process ALL {len(target_factors)} factors")
         
     elif factors:
         target_factors = list(factors)
-        
-        if not skip_factor_compute:
-            click.echo(f"\n🔧 Computing and evaluating factors: {', '.join(target_factors)}...")
-            run_step("1. Compute & Evaluate Factors", compute_factors_step, target_factors)
-        
-        click.echo(f"\n📊 Pipeline will process {len(target_factors)} factor(s)")
-        
-    elif auto_best:
-        if not cmp_path.exists():
+        # Verify requested factors exist in comparison CSV
+        available = set(comparison.index)
+        missing = [f for f in target_factors if f not in available]
+        if missing:
             click.echo(
-                f"ERROR: {cmp_path} not found.\n"
-                "Run with --factors first to compute factors."
+                f"\nERROR: Factor(s) not found in factor_comparison.csv: {', '.join(missing)}\n"
+                f"Available factors: {', '.join(sorted(available)[:10])}..."
             )
             sys.exit(1)
+        click.echo(f"\n📊 Pipeline will process {len(target_factors)} factor(s): {', '.join(target_factors)}")
         
-        comparison = pd.read_csv(cmp_path, index_col=0)
+    elif auto_best:
         best = select_best_factor(comparison, metric=optimize_by)
         if best:
             target_factors = [best]
             click.echo(f"\n✨ Auto-selected best factor: {best} (by {optimize_by})")
         else:
-            click.echo("ERROR: Could not determine best factor.")
+            click.echo("ERROR: Could not determine best factor from comparison CSV.")
             sys.exit(1)
     else:
         click.echo("\nERROR: Must specify --factors, --all-factors, or --auto-best")
