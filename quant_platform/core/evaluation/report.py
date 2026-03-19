@@ -194,11 +194,46 @@ def generate_report(
         sections.append("<p><em>No backtest results found.</em></p>")
 
     # ============================
-    # Section 2: NAV & Drawdown
+    # Section 2: Factor Comparison (All Factors)
+    # ============================
+    cmp_path = resolve_data_path("factors", "factor_comparison.csv")
+    if cmp_path.exists():
+        try:
+            comparison = pd.read_csv(cmp_path, index_col=0)
+            sections.append("<h2>2. Factor Comparison (All Factors)</h2>")
+            sections.append(
+                "<p>Metrics computed against 1-day forward return. "
+                "<strong>ric_mean_ic</strong> = Rank IC mean, "
+                "<strong>ric_icir</strong> = annualised ICIR, "
+                "<strong>ls_sharpe</strong> = long–short annualised Sharpe.</p>"
+            )
+            sections.append('<div class="section">')
+            sections.append(_df_to_html(comparison, precision=4))
+            sections.append("</div>")
+            best = select_best_factor(comparison)
+            if best and signal_col is None:
+                signal_col = best
+                logger.info("Auto-selected best factor: {}", signal_col)
+            if best:
+                sections.append(
+                    f"<p><strong>Best factor (by ric_mean_ic): {best}</strong></p>"
+                )
+        except Exception as exc:
+            sections.append(f"<p><em>Could not load factor comparison: {exc}</em></p>")
+            logger.warning("Factor comparison load failed: {}", exc)
+    else:
+        sections.append("<h2>2. Factor Comparison (All Factors)</h2>")
+        sections.append(
+            "<p><em>No factor_comparison.csv found. "
+            "Run <code>python scripts/build_factors.py --evaluate</code> to generate it.</em></p>"
+        )
+
+    # ============================
+    # Section 3: NAV & Drawdown
     # ============================
     if daily_pnl is not None:
         from quant_platform.core.evaluation.plots import plot_nav, plot_drawdown
-        sections.append("<h2>2. NAV & Drawdown</h2>")
+        sections.append("<h2>3. NAV & Drawdown</h2>")
         sections.append('<div class="chart">')
         sections.append(_fig_to_b64(plot_nav(daily_pnl)))
         sections.append("</div>")
@@ -207,33 +242,33 @@ def generate_report(
         sections.append("</div>")
 
     # ============================
-    # Section 3: Monthly Returns
+    # Section 4: Monthly Returns
     # ============================
     if daily_pnl is not None:
         from quant_platform.core.evaluation.analytics import monthly_return_table
         from quant_platform.core.evaluation.plots import plot_monthly_heatmap
-        sections.append("<h2>3. Monthly Return Heatmap</h2>")
+        sections.append("<h2>4. Monthly Return Heatmap</h2>")
         mt = monthly_return_table(daily_pnl["net_ret"])
         sections.append('<div class="chart">')
         sections.append(_fig_to_b64(plot_monthly_heatmap(mt)))
         sections.append("</div>")
 
     # ============================
-    # Section 4: Rolling Sharpe
+    # Section 5: Rolling Sharpe
     # ============================
     if daily_pnl is not None:
         from quant_platform.core.evaluation.plots import plot_rolling_sharpe
-        sections.append("<h2>4. Rolling 1-Year Sharpe Ratio</h2>")
+        sections.append("<h2>5. Rolling 1-Year Sharpe Ratio</h2>")
         sections.append('<div class="chart">')
         sections.append(_fig_to_b64(plot_rolling_sharpe(daily_pnl["net_ret"])))
         sections.append("</div>")
 
     # ============================
-    # Section 5: Turnover
+    # Section 6: Turnover
     # ============================
     if daily_weights is not None:
         from quant_platform.core.evaluation.analytics import rolling_turnover
-        sections.append("<h2>5. Turnover Analysis</h2>")
+        sections.append("<h2>6. Turnover Analysis</h2>")
         to = rolling_turnover(daily_weights)
         if len(to) > 0:
             from quant_platform.core.evaluation.plots import _apply_style
@@ -252,10 +287,10 @@ def generate_report(
             sections.append("</div>")
 
     # ============================
-    # Section 6: IC / RankIC
+    # Section 7: IC / RankIC
     # ============================
     if factors is not None and prices is not None and signal_col:
-        sections.append(f"<h2>6. IC Analysis — {signal_col}</h2>")
+        sections.append(f"<h2>7. IC Analysis — {signal_col}</h2>")
         try:
             from quant_platform.core.signals.cross_sectional.evaluation import (
                 add_forward_returns, compute_rank_ic_series, ic_summary,
@@ -294,10 +329,10 @@ def generate_report(
             logger.warning("IC analysis failed: {}", exc)
 
     # ============================
-    # Section 7: Factor Correlation
+    # Section 8: Factor Correlation
     # ============================
     if factors is not None:
-        sections.append("<h2>7. Factor Correlation Matrix</h2>")
+        sections.append("<h2>8. Factor Correlation Matrix</h2>")
         try:
             from quant_platform.core.evaluation.analytics import factor_correlation
             from quant_platform.core.evaluation.plots import plot_correlation_heatmap
@@ -310,10 +345,10 @@ def generate_report(
             sections.append(f"<p><em>Correlation analysis failed: {exc}</em></p>")
 
     # ============================
-    # Section 8: Cost Attribution
+    # Section 9: Cost Attribution
     # ============================
     if trades is not None and not trades.empty:
-        sections.append("<h2>8. Cost Attribution</h2>")
+        sections.append("<h2>9. Cost Attribution</h2>")
         try:
             from quant_platform.core.execution.backtest.pnl import cost_attribution
             attr = cost_attribution(trades)
@@ -322,10 +357,10 @@ def generate_report(
             sections.append(f"<p><em>Cost attribution failed: {exc}</em></p>")
 
     # ============================
-    # Section 9: Walk-Forward
+    # Section 10: Walk-Forward
     # ============================
     if run_walkforward and factors is not None and prices is not None and signal_col:
-        sections.append("<h2>9. Walk-Forward Validation</h2>")
+        sections.append("<h2>10. Walk-Forward Validation</h2>")
         try:
             from quant_platform.core.evaluation.walkforward import WalkForwardConfig, run_walk_forward
             from quant_platform.core.evaluation.plots import plot_walkforward_sharpe
@@ -346,10 +381,10 @@ def generate_report(
             logger.warning("Walk-forward failed: {}", exc)
 
     # ============================
-    # Section 10: Ablation
+    # Section 11: Ablation
     # ============================
     if run_ablation and daily_weights is not None and trades is not None and prices is not None:
-        sections.append("<h2>10. Ablation Study (Cost Sensitivity)</h2>")
+        sections.append("<h2>11. Ablation Study (Cost Sensitivity)</h2>")
         try:
             from quant_platform.core.evaluation.ablation import run_cost_ablation
             from quant_platform.core.evaluation.plots import plot_ablation
@@ -403,6 +438,48 @@ def generate_report(
 
     logger.info("Report generated → {} ({:.0f} KB)", output_path, output_path.stat().st_size / 1024)
     return output_path
+
+
+# ===================================================================
+# Best-factor selector
+# ===================================================================
+
+def select_best_factor(
+    comparison: pd.DataFrame,
+    metric: str = "ric_mean_ic",
+) -> Optional[str]:
+    """Return the factor name with the highest value of *metric*.
+
+    Parameters
+    ----------
+    comparison : DataFrame produced by :func:`compare_factors`
+        (index = factor name, columns include ``ric_mean_ic``, ``ric_icir``,
+        ``ls_sharpe``, etc.).
+    metric : column name to rank by (descending).  Defaults to
+        ``"ric_mean_ic"``.
+
+    Returns
+    -------
+    Factor name string, or ``None`` if the metric column is absent.
+    """
+    if comparison is None or comparison.empty:
+        return None
+    if metric not in comparison.columns:
+        logger.warning("Metric '{}' not in comparison columns: {}", metric, list(comparison.columns))
+        fallbacks = ["ric_mean_ic", "ric_icir", "ls_sharpe"]
+        for fb in fallbacks:
+            if fb in comparison.columns:
+                metric = fb
+                logger.info("Falling back to metric '{}'.", metric)
+                break
+        else:
+            return None
+    ranked = comparison[metric].dropna().sort_values(ascending=False)
+    if ranked.empty:
+        return None
+    best = str(ranked.index[0])
+    logger.info("Best factor by {}: {} = {:.4f}", metric, best, ranked.iloc[0])
+    return best
 
 
 # ===================================================================

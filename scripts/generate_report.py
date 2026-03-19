@@ -12,6 +12,13 @@ Usage examples::
     # Specify signal factor
     python scripts/generate_report.py --signal MOM_12_1M
 
+    # Auto-select best factor from factor_comparison.csv (ranked by ric_mean_ic)
+    python scripts/generate_report.py --auto-best
+
+    # Auto-select best factor by a different metric
+    python scripts/generate_report.py --auto-best --optimize-by ric_icir
+    python scripts/generate_report.py --auto-best --optimize-by ls_sharpe
+
     # Custom walk-forward parameters
     python scripts/generate_report.py --wf-train 24 --wf-test 6 --wf-step 6
 
@@ -44,6 +51,12 @@ logger.add(sys.stderr, level="INFO", format=(
 @click.command()
 @click.option("--signal", "-s", type=str, default=None,
               help="Factor column to highlight in IC analysis.")
+@click.option("--auto-best", is_flag=True, default=False,
+              help="Auto-select best factor from data/factors/factor_comparison.csv.")
+@click.option("--optimize-by", type=str, default="ric_mean_ic",
+              show_default=True,
+              help="Metric used to rank factors when --auto-best is set "
+                   "(e.g. ric_mean_ic, ric_icir, ls_sharpe).")
 @click.option("--output", "-o", type=str, default=None,
               help="Output HTML file path.")
 @click.option("--no-walkforward", is_flag=True, default=False,
@@ -56,11 +69,30 @@ logger.add(sys.stderr, level="INFO", format=(
               help="Walk-forward test window (months).")
 @click.option("--wf-step", type=int, default=12,
               help="Walk-forward step size (months).")
-def main(signal, output, no_walkforward, no_ablation, wf_train, wf_test, wf_step):
+def main(signal, auto_best, optimize_by, output, no_walkforward, no_ablation,
+         wf_train, wf_test, wf_step):
     """EntroPy — Generate HTML research report."""
     set_project_root(_project_root)
 
-    from quant_platform.core.evaluation.report import generate_report
+    from quant_platform.core.evaluation.report import generate_report, select_best_factor
+    from quant_platform.core.utils.io import resolve_data_path
+
+    # --- Auto-select best factor ---
+    if auto_best and signal is None:
+        cmp_path = resolve_data_path("factors", "factor_comparison.csv")
+        if cmp_path.exists():
+            import pandas as pd
+            comparison = pd.read_csv(cmp_path, index_col=0)
+            signal = select_best_factor(comparison, metric=optimize_by)
+            if signal:
+                click.echo(f"  Auto-selected factor: {signal} (ranked by {optimize_by})")
+            else:
+                click.echo("  WARNING: could not determine best factor from comparison CSV.")
+        else:
+            click.echo(
+                f"  WARNING: {cmp_path} not found. "
+                "Run 'python scripts/build_factors.py --evaluate' first."
+            )
 
     wf_kwargs = {
         "train_months": wf_train,

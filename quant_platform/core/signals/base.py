@@ -15,8 +15,9 @@ to post-process.
 from __future__ import annotations
 
 import abc
+import dataclasses
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -60,6 +61,33 @@ class FactorBase(abc.ABC):
     """
 
     meta: FactorMeta  # must be set by subclass
+
+    def __init__(self, **param_overrides: Any) -> None:
+        """Initialise factor, optionally overriding meta fields or extra params.
+
+        Parameters
+        ----------
+        **param_overrides :
+            Any :class:`FactorMeta` field (``lookback``, ``lag``, ``name``, …)
+            overrides the frozen meta dataclass for this instance only.
+            Any *other* key is stored in ``self._extra_params`` and is
+            available to concrete ``_compute`` implementations.
+
+        Examples
+        --------
+        >>> Mom1M(period=42)          # extra param read in _compute
+        >>> Mom1M(lag=2)              # overrides meta.lag (applied by base)
+        >>> Mom1M(lookback=43, period=42)
+        """
+        meta_field_names = {f.name for f in dataclasses.fields(self.__class__.meta)}
+        meta_kwargs = {k: v for k, v in param_overrides.items() if k in meta_field_names}
+        self._extra_params: Dict[str, Any] = {
+            k: v for k, v in param_overrides.items() if k not in meta_field_names
+        }
+        if meta_kwargs:
+            self._meta: FactorMeta = dataclasses.replace(self.__class__.meta, **meta_kwargs)
+        else:
+            self._meta = self.__class__.meta
 
     # ------------------------------------------------------------------
     # Abstract
@@ -117,7 +145,7 @@ class FactorBase(abc.ABC):
             winsorize,
         )
 
-        name = self.meta.name
+        name = self._meta.name
         logger.debug("Computing factor: {}", name)
 
         # 1. Raw signal
@@ -134,8 +162,8 @@ class FactorBase(abc.ABC):
             df.columns = list(df.columns[:-1]) + [name]
 
         # 2. Lag
-        if self.meta.lag > 0:
-            df = apply_lag(df, name, lag=self.meta.lag)
+        if self._meta.lag > 0:
+            df = apply_lag(df, name, lag=self._meta.lag)
 
         # 3. Missing values (first pass — before transforms)
         df = handle_missing(df, name, method=fillna_method)
@@ -164,5 +192,6 @@ class FactorBase(abc.ABC):
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        m = self.meta
-        return f"<Factor {m.name} [{m.category}] lookback={m.lookback} lag={m.lag}>"
+        m = self._meta
+        extra = f" params={self._extra_params}" if self._extra_params else ""
+        return f"<Factor {m.name} [{m.category}] lookback={m.lookback} lag={m.lag}{extra}>"

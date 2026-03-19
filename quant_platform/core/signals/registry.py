@@ -131,9 +131,27 @@ class FactorRegistry:
         prices: pd.DataFrame,
         fundamentals: Optional[pd.DataFrame] = None,
         factor_names: Optional[List[str]] = None,
+        factor_params: Optional[Dict[str, Dict]] = None,
         **kwargs,
     ) -> pd.DataFrame:
         """Compute all (or selected) factors and return a wide DataFrame.
+
+        Parameters
+        ----------
+        prices : price DataFrame.
+        fundamentals : optional fundamentals DataFrame.
+        factor_names : subset of factors to compute; ``None`` = all.
+        factor_params : per-factor constructor overrides, e.g.::
+
+            {
+                "MOM_1M":    {"period": 42, "lag": 2},
+                "MOM_12_1M": {"period": 189},
+            }
+
+            Keys that match :class:`~quant_platform.core.signals.base.FactorMeta`
+            fields override the frozen meta for that instance; other keys are
+            forwarded to ``_compute`` via ``self._extra_params``.
+        **kwargs : forwarded to each factor's :meth:`compute` pipeline.
 
         Returns a DataFrame with columns ``[date, ticker, F1, F2, …]``.
         """
@@ -142,8 +160,9 @@ class FactorRegistry:
 
         for name in names:
             cls = self.get(name)
+            instance_kwargs = (factor_params or {}).get(name, {})
             try:
-                factor_df = cls().compute(prices, fundamentals, **kwargs)
+                factor_df = cls(**instance_kwargs).compute(prices, fundamentals, **kwargs)
                 results.append(factor_df)
             except Exception as exc:
                 logger.error("Factor {} failed: {}", name, exc)

@@ -57,11 +57,12 @@ class Mom1M(FactorBase):
         direction=1,
         references=["Jegadeesh & Titman (1993)"],
     )
+    _DEFAULT_PERIOD = 21
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+        period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, 21))
-        return ret
+        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
 
 class Mom3M(FactorBase):
@@ -74,10 +75,12 @@ class Mom3M(FactorBase):
         direction=1,
         references=["Jegadeesh & Titman (1993)"],
     )
+    _DEFAULT_PERIOD = 63
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+        period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, 63))
+        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
 
 class Mom6M(FactorBase):
@@ -90,10 +93,12 @@ class Mom6M(FactorBase):
         direction=1,
         references=["Jegadeesh & Titman (1993)"],
     )
+    _DEFAULT_PERIOD = 126
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+        period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, 126))
+        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
 
 class Mom12_1M(FactorBase):
@@ -108,12 +113,13 @@ class Mom12_1M(FactorBase):
         direction=1,
         references=["Jegadeesh & Titman (1993)"],
     )
+    _DEFAULT_PERIOD = 252
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+        period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
         df = prices.sort_values(["ticker", "date"])
-        # 12-month return computed from t-252 to t (the lag=21 in meta
-        # will shift the result so it's actually t-252 to t-21)
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, 252))
+        # period-day return; lag= in meta will shift to skip the most-recent month
+        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
 
 class STR1W(FactorBase):
@@ -129,10 +135,12 @@ class STR1W(FactorBase):
         direction=-1,
         references=["Jegadeesh (1990)"],
     )
+    _DEFAULT_PERIOD = 5
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+        period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, 5))
+        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
 
 class STR1M(FactorBase):
@@ -147,10 +155,12 @@ class STR1M(FactorBase):
         direction=-1,
         references=["Jegadeesh (1990)"],
     )
+    _DEFAULT_PERIOD = 21
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+        period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, 21))
+        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
 
 class MomPath(FactorBase):
@@ -171,14 +181,15 @@ class MomPath(FactorBase):
         references=["Daniel & Moskowitz (2016)"],
     )
 
+    _DEFAULT_WINDOW = 126
+
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+        window = int(self._extra_params.get("window", self._DEFAULT_WINDOW))
         df = prices.sort_values(["ticker", "date"])
-        window = 126
 
         def _path(s: pd.Series) -> pd.Series:
             ret = s.pct_change(periods=window)
             mdd = _rolling_max_drawdown(s, window).abs()
-            # Avoid division by zero
             mdd = mdd.replace(0, np.nan)
             return ret / mdd
 
