@@ -153,11 +153,25 @@ def run_portfolio_pipeline(
 
     save_parquet(daily_weights, output_path)
 
+    # Save metadata (signal_col used) for downstream consistency checks
+    import json
+    meta_path = resolve_data_path("portfolio", "metadata.json")
+    meta = {
+        "signal_col": signal_col,
+        "method": method,
+        "mode": config.mode.value,
+        "rebalance_freq": config.rebalance_freq,
+        "weights_path": str(output_path),
+    }
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    logger.info("Portfolio metadata saved → {}", meta_path)
+
     return {
         "weights": weights,
         "daily_weights": daily_weights,
         "config": config,
         "output_path": output_path,
+        "signal_col": signal_col,
     }
 
 

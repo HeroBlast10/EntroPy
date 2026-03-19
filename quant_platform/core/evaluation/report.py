@@ -128,6 +128,8 @@ def generate_report(
     -------
     Path to the generated HTML report.
     """
+    import json
+
     cfg = load_config()
     sections: List[str] = []
 
@@ -159,6 +161,16 @@ def generate_report(
             daily_weights = load_parquet(wfiles[-1])
             daily_weights["date"] = pd.to_datetime(daily_weights["date"])
 
+    # --- Load portfolio metadata to detect backtest signal ---
+    backtest_signal_col: Optional[str] = None
+    meta_path = resolve_data_path("portfolio", "metadata.json")
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            backtest_signal_col = meta.get("signal_col")
+        except Exception:
+            pass
+
     # Detect signal col
     if signal_col is None and factors is not None:
         for c in factors.columns:
@@ -166,11 +178,44 @@ def generate_report(
                 signal_col = c
                 break
 
+    # --- Consistency check ---
+    signal_mismatch = False
+    if backtest_signal_col and signal_col and backtest_signal_col != signal_col:
+        signal_mismatch = True
+        logger.warning(
+            "Signal mismatch: report signal_col='{}' but backtest was run with '{}'. "
+            "NAV/drawdown/performance sections reflect '{}', while IC analysis uses '{}'.",
+            signal_col, backtest_signal_col, backtest_signal_col, signal_col,
+        )
+
     # ============================
     # Section 1: Executive Summary
     # ============================
     sections.append("<h2>1. Executive Summary</h2>")
+
+    # Warning banner if signal mismatch
+    if signal_mismatch:
+        sections.append(
+            '<div style="background:#fff3cd; border:1px solid #ffc107; border-radius:6px; '
+            'padding:12px 16px; margin-bottom:16px;">'
+            f'<strong>⚠️ Signal Mismatch Warning:</strong> '
+            f'The backtest data (NAV, drawdown, performance, turnover, cost attribution) '
+            f'was generated using factor <strong>{backtest_signal_col}</strong>, '
+            f'but this report\'s IC analysis uses <strong>{signal_col}</strong>.<br>'
+            f'<em>To generate a consistent report for {signal_col}, re-run:</em><br>'
+            f'<code>python scripts/build_portfolio.py --signal {signal_col}</code><br>'
+            f'<code>python scripts/run_backtest.py</code><br>'
+            f'<code>python scripts/generate_report.py --signal {signal_col}</code>'
+            '</div>'
+        )
+
     if perf:
+        # Show which factor the backtest was run with
+        bt_factor_display = backtest_signal_col or "unknown"
+        sections.append(
+            f'<p><strong>Backtest Factor:</strong> {bt_factor_display} &nbsp;|&nbsp; '
+            f'<strong>IC Analysis Factor:</strong> {signal_col or "N/A"}</p>'
+        )
         sections.append('<div class="summary-grid">')
         sections.append('<div class="metric-card"><h3>Gross Performance</h3><table>')
         sections.append(_metric_html("Ann. Return", perf.get("gross_ann_return")))
@@ -446,7 +491,7 @@ def generate_report(
 
 def select_best_factor(
     comparison: pd.DataFrame,
-    metric: str = "ric_mean_ic",
+    metric: str = "ls_sharpe",
 ) -> Optional[str]:
     """Return the factor name with the highest value of *metric*.
 
