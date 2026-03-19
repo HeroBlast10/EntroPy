@@ -78,10 +78,14 @@ pip install -r requirements.txt
 
 # Full US equity pipeline
 python scripts/build_dataset.py          # 1. Download & align price data
-python scripts/build_factors.py          # 2. Compute all registered signals
+python scripts/build_factors.py --evaluate  # 2. Compute & evaluate all signals → factor_comparison.csv
 python scripts/build_portfolio.py        # 3. Build portfolio weights
 python scripts/run_backtest.py           # 4. Simulate execution + PnL
-python scripts/generate_report.py        # 5. Generate HTML research report
+python scripts/generate_report.py --auto-best  # 5. Generate HTML report (auto-select best factor)
+
+# Factor parameter tuning (grid-search)
+python scripts/tune_factors.py           # Search period/lag space, rank by IC/ICIR/Sharpe
+python scripts/tune_factors.py --objective ric_icir --top 5
 
 # Interactive dashboard
 streamlit run quant_platform/apps/dashboard/app.py
@@ -176,7 +180,12 @@ See: `quant_platform/experiments/us_signal_lab.yaml`
 
 ## Research Report
 
-Auto-generated self-contained HTML with 10 sections: executive summary, NAV & drawdown, monthly heatmap, rolling Sharpe, turnover, IC/RankIC, factor correlation, cost attribution, walk-forward OOS, ablation.
+Auto-generated self-contained HTML with **11 sections**: executive summary, **all-factor comparison table** (with auto-best selection), NAV & drawdown, monthly heatmap, rolling Sharpe, turnover, IC/RankIC for selected factor, factor correlation, cost attribution, walk-forward OOS, ablation.
+
+**New features:**
+- `--auto-best` flag: automatically selects the top-ranked factor from `factor_comparison.csv`
+- `--optimize-by ric_mean_ic | ric_icir | ls_sharpe`: choose ranking metric
+- Section 2 displays full factor comparison table with metrics for all computed factors
 
 ## IB Paper Trading
 

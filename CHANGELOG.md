@@ -2,6 +2,22 @@
 
 All notable changes to EntroPy are documented in this file.
 
+## [0.7.0] — 2026-03-19
+
+### Added — All-Factor Comparison & Auto‑Best Selection
+- `quant_platform/core/evaluation/report.py` — new Section 2 "Factor Comparison (All Factors)" that reads `data/factors/factor_comparison.csv` and renders a full comparison table; renumbered existing sections 2‑10 → 3‑11
+- `select_best_factor(comparison, metric="ric_mean_ic")` helper that ranks factors by any metric (ric_mean_ic, ric_icir, ls_sharpe, …) and returns the winner
+- `scripts/generate_report.py` — added `--auto-best` flag and `--optimize-by` option; when `--auto-best` is set the CLI reads factor_comparison.csv, calls `select_best_factor()`, and passes the winner as `signal_col`
+
+### Added — Factor Parameter Overrides & Registry Support
+- `quant_platform/core/signals/base.py` — `FactorBase.__init__(**param_overrides)`; meta-field keys (lookback, lag, …) replace the frozen FactorMeta via `dataclasses.replace`; all other keys land in `self._extra_params` for `_compute()` to consume; `compute()` now uses `self._meta` throughout
+- `quant_platform/core/signals/registry.py` — `compute_all(…, factor_params: Dict[str, Dict] = None)` so callers can pass per‑factor constructor kwargs for one‑shot tuning
+- Updated all 7 momentum/reversal factors (`MOM_1M`, `MOM_3M`, `MOM_6M`, `MOM_12_1M`, `STR_1W`, `STR_1M`, `MOM_PATH`) to read `period`/`window` from `self._extra_params` with fallback to original defaults, preserving existing behaviour
+
+### Added — Grid‑Search Auto‑Tuner
+- `scripts/tune_factors.py` (new) — grid‑search CLI that iterates the cartesian product of `period`/`window` × `lag` search space for each factor, evaluates `ric_mean_ic`, `ric_icir`, and `ls_sharpe`, saves `data/factors/tune_results.csv`, and prints top‑N results per factor and the overall best configuration
+- Default search space covers all 7 momentum factors with practical period/lag ranges; supports custom objective (`--objective ric_mean_ic | ric_icir | ls_sharpe`), factor subset (`--factors`), and result count (`--top`)
+
 ## [0.6.0] — 2026-02-11
 
 ### Added — IB Paper Trading (Step 7)
