@@ -2,6 +2,58 @@
 
 All notable changes to EntroPy are documented in this file.
 
+## [0.8.1] — 2026-03-25
+
+### Fixed — Critical Bug Fixes (18 test failures → 0 failures)
+
+**P0 Fixes — Production-Breaking Issues**
+
+- **ML Alpha Model — PurgedKFold Split Logic**
+  - `quant_platform/core/alpha_models/ml_alpha.py:65-102` — fixed `PurgedKFold.split()` to produce exactly `n_splits` folds
+  - Previous implementation: divided data into `n_splits` segments, first segment had no training data → only 4 folds generated instead of 5
+  - New implementation: divide into `n_splits+1` segments, first segment always available for training → exactly `n_splits` folds
+  - Embargo size now computed on total `n` (not per-segment) for meaningful gaps between train/test
+
+- **ML Alpha Model — MultiIndex Forward Returns Merge**
+  - `quant_platform/core/alpha_models/ml_alpha.py:199-206, 336-345` — fixed `fit()` and `cross_validate()` to handle MultiIndex Series
+  - Previous implementation: `factors["forward_return"] = forward_returns` failed silently when `forward_returns` is MultiIndex Series
+  - New implementation: merge via `date`/`ticker` join: `factors.merge(forward_returns.reset_index(), on=["date", "ticker"])`
+  - Prevents all 14 ML alpha tests from failing with `TypeError: incompatible index`
+
+- **Portfolio Pipeline — Weight Validation**
+  - `quant_platform/core/portfolio/pipeline.py:140-141` — added `validate_portfolio_weights()` call after `carry_forward_weights()`, before saving
+  - Previous implementation: corrupted weights (sum > 1.0) could be persisted to disk without detection
+  - New implementation: validation raises `ValueError` if invariants violated (long-only sum ≠ 1.0, negative weights, gross exposure > 2.0)
+  - Prevents bad backtest artifacts from being used in production or interviews
+
+- **Factor Pipeline — Fundamentals & Type-Aware Evaluation**
+  - `scripts/build_factors.py:78-92, 110-164` — load fundamentals and pass to `compute_all()`; route evaluation by `signal_type`
+  - Previous implementation: fundamentals not loaded → value/quality factors (B/M, E/Y, ROE, GP) missing from `factor_comparison.csv`; all factors forced through cross-sectional IC tearsheet regardless of type
+  - New implementation: load `fundamentals.parquet` if available; route each factor to type-specific scorecard (CS → IC/RankIC, TS → hit rate/directional Sharpe, regime → overlay comparison, RV → half-life/stationarity)
+  - Aligns pipeline with README claim: "different signal types use different scorecards"
+
+**P1 Fixes — Mathematical Correctness**
+
+- **Factor Risk Model — Contribution Decomposition**
+  - `quant_platform/core/portfolio/risk_model.py:287-293` — fixed `factor_contributions` to use full covariance matrix
+  - Previous implementation: `contribution_k = b_k² × F_kk` (diagonal only) → contributions didn't sum to `factor_variance`
+  - New implementation: `contribution_k = b_k × (F @ b)_k` (Euler decomposition) → Σ contributions = b' F b (factor variance)
+  - Fixes 2 risk decomposition tests
+
+- **VaR Risk Metrics — Definition Correction**
+  - `quant_platform/core/evaluation/risk_metrics.py:63-65` — floor VaR at 0 for constant positive returns
+  - Previous implementation: `VaR = -percentile(5%)` could return negative value (e.g., -0.01 for all-positive returns)
+  - New implementation: `VaR = max(0, -percentile(5%))` → VaR = 0 when no loss risk
+  - Fixes `test_var_with_constant_returns`
+
+**Test Fixes — Assertion Corrections**
+
+- `tests/test_ml_alpha.py:122` — train/test split date changed from `2023-10-01` (beyond 252-day data range) to `2023-07-01`
+- `tests/test_rebalance.py:49` — assertion now accounts for dates starting from first rebalance (not calendar start): `dates_from_first_reb = all_dates[all_dates >= reb[0]]`
+- `tests/test_inverse_vol_weighting.py:235` — use `std(ddof=0)` for single-element Series (ddof=1 returns NaN)
+
+**Test Results:** 18 failed, 131 passed → **0 failed, 149 passed**
+
 ## [0.8.0] — 2026-03-25
 
 ### Added — ML-Based Alpha Model
