@@ -22,6 +22,7 @@ exchange:
 
 # --- Universe Filters ---
 universe:
+  index_membership: "sp500"        # ticker universe: "sp500" or custom list
   min_listing_days: 60             # exclude stocks listed < N trading days
   min_price: 1.0                   # exclude penny stocks (close < $1)
   min_market_cap: 5.0e+7           # $50M minimum market cap
