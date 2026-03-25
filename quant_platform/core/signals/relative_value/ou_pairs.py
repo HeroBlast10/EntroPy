@@ -1,7 +1,17 @@
-"""Ornstein–Uhlenbeck process for pairs / mean-reversion — wrapped from TradeX.
+"""Ornstein–Uhlenbeck process for single-stock mean-reversion.
 
 Provides MLE-based OU parameter estimation with Numba-accelerated kernels
 and a rolling z-score factor for portfolio construction.
+
+IMPORTANT: This is NOT true pairs trading. The OU_ZSCORE factor applies
+OU process fitting to individual stock log-prices, not to pair spreads.
+For true pairs trading, you would need:
+1. Cointegration testing to identify stock pairs
+2. Spread construction (e.g., log(P1) - beta * log(P2))
+3. OU fitting on the spread (not individual prices)
+
+This implementation is useful for single-stock mean-reversion strategies,
+but should not be described as "pairs trading" in documentation.
 
 Numba kernels
 -------------
@@ -11,7 +21,7 @@ Numba kernels
 Classes
 -------
 - ``OUProcess``  — fit / rolling_fit / generate_signals / cointegration
-- ``OUZScore``   — FactorBase subclass
+- ``OUZScore``   — FactorBase subclass (single-stock mean reversion)
 """
 
 from __future__ import annotations

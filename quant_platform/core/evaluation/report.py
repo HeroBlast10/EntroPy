@@ -183,32 +183,29 @@ def generate_report(
     signal_mismatch = False
     if backtest_signal_col and signal_col and backtest_signal_col != signal_col:
         signal_mismatch = True
-        logger.warning(
-            "Signal mismatch: report signal_col='{}' but backtest was run with '{}'. "
-            "NAV/drawdown/performance sections reflect '{}', while IC analysis uses '{}'.",
-            signal_col, backtest_signal_col, backtest_signal_col, signal_col,
+        error_msg = (
+            f"Signal mismatch detected:\n"
+            f"  - Backtest was run with factor: '{backtest_signal_col}'\n"
+            f"  - Report is trying to use factor: '{signal_col}'\n\n"
+            f"This would create an inconsistent report where NAV/performance metrics\n"
+            f"reflect '{backtest_signal_col}' but IC analysis uses '{signal_col}'.\n\n"
+            f"To fix, re-run the backtest with the desired factor:\n"
+            f"  python scripts/build_portfolio.py --signal {signal_col}\n"
+            f"  python scripts/run_backtest.py\n"
+            f"  python scripts/generate_report.py --signal {signal_col}\n\n"
+            f"Or generate report for the factor that was actually backtested:\n"
+            f"  python scripts/generate_report.py --signal {backtest_signal_col}"
+        )
+        logger.error(error_msg)
+        raise ValueError(
+            f"Signal mismatch: backtest used '{backtest_signal_col}' but report "
+            f"requested '{signal_col}'. Re-run backtest or use correct signal."
         )
 
     # ============================
     # Section 1: Executive Summary
     # ============================
     sections.append("<h2>1. Executive Summary</h2>")
-
-    # Warning banner if signal mismatch
-    if signal_mismatch:
-        sections.append(
-            '<div style="background:#fff3cd; border:1px solid #ffc107; border-radius:6px; '
-            'padding:12px 16px; margin-bottom:16px;">'
-            f'<strong>⚠️ Signal Mismatch Warning:</strong> '
-            f'The backtest data (NAV, drawdown, performance, turnover, cost attribution) '
-            f'was generated using factor <strong>{backtest_signal_col}</strong>, '
-            f'but this report\'s IC analysis uses <strong>{signal_col}</strong>.<br>'
-            f'<em>To generate a consistent report for {signal_col}, re-run:</em><br>'
-            f'<code>python scripts/build_portfolio.py --signal {signal_col}</code><br>'
-            f'<code>python scripts/run_backtest.py</code><br>'
-            f'<code>python scripts/generate_report.py --signal {signal_col}</code>'
-            '</div>'
-        )
 
     if perf:
         # Show which factor the backtest was run with

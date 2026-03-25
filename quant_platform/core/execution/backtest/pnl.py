@@ -198,16 +198,21 @@ def cost_attribution(trades: pd.DataFrame) -> pd.DataFrame:
 def performance_summary(
     daily_returns: pd.DataFrame,
     annualisation: int = 252,
+    benchmark_returns: Optional[pd.Series] = None,
+    risk_free_rate: float = 0.0,
 ) -> Dict[str, float]:
     """Compute standard performance metrics from daily PnL.
 
     Parameters
     ----------
     daily_returns : output from :func:`compute_daily_returns`.
+    annualisation : number of periods per year (252 for daily)
+    benchmark_returns : optional benchmark returns for alpha/beta analysis
+    risk_free_rate : annualized risk-free rate (e.g., 0.03 for 3%)
 
     Returns
     -------
-    Dict of headline numbers.
+    Dict of headline numbers, including benchmark-relative metrics if benchmark provided.
     """
     dr = daily_returns
     n = len(dr)
@@ -263,5 +268,42 @@ def performance_summary(
         "start_date": str(dr.index[0].date()),
         "end_date": str(dr.index[-1].date()),
     }
+    
+    # Add VaR/CVaR risk metrics
+    from quant_platform.core.evaluation.risk_metrics import risk_metrics_summary
+    
+    risk_metrics = risk_metrics_summary(net, confidence=0.95)
+    summary.update({
+        "var_95_daily": risk_metrics["var_historical"],
+        "cvar_95_daily": risk_metrics["cvar_historical"],
+        "var_95_parametric": risk_metrics["var_parametric"],
+        "var_95_cornish_fisher": risk_metrics["var_cornish_fisher"],
+        "return_skewness": risk_metrics["skewness"],
+        "return_kurtosis": risk_metrics["kurtosis"],
+    })
+    
+    # Add benchmark-relative metrics if benchmark provided
+    if benchmark_returns is not None and len(benchmark_returns) > 0:
+        from quant_platform.core.evaluation.benchmark_analytics import benchmark_analysis
+        
+        # Align benchmark to portfolio dates
+        bench_aligned = benchmark_returns.reindex(dr.index)
+        bench_aligned = bench_aligned.dropna()
+        
+        if len(bench_aligned) >= 10:
+            # Use net returns for benchmark comparison
+            port_aligned = net.reindex(bench_aligned.index)
+            
+            bench_metrics = benchmark_analysis(
+                port_aligned,
+                bench_aligned,
+                risk_free_rate=risk_free_rate,
+                annualization=annualisation,
+            )
+            
+            # Add benchmark metrics to summary
+            summary.update(bench_metrics)
+        else:
+            logger.warning("Insufficient overlapping dates for benchmark analysis")
 
     return summary

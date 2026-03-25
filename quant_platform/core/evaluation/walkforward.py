@@ -1,19 +1,27 @@
-"""Walk-forward validation framework.
+"""Simple rolling out-of-sample (OOS) check.
 
-Implements a rolling train/validate (out-of-sample) scheme:
+Implements a basic rolling train/test scheme for sanity checking:
 
     |--- train_months ---|--- test_months ---|
                          |--- train_months ---|--- test_months ---|
                                               |--- train_months ---|--- ...
 
 For each fold:
-1. Compute factor values on the **training** window.
-2. Rank factors by IC during training (optional: select top-K factors).
-3. Build portfolio on the **test** window using training-period signals.
-4. Record OOS (out-of-sample) performance.
+1. Compute IC on the **training** window to validate signal has predictive power.
+2. Build a fixed top-quintile long-only portfolio on the **test** window.
+3. Record OOS performance metrics.
 
-This directly addresses the most common interview question:
-"How do you know your backtest isn't overfit?"
+LIMITATIONS (not a full walk-forward framework):
+- Does NOT perform factor selection within each fold
+- Does NOT tune parameters (e.g., quantile thresholds, lookback windows)
+- Does NOT freeze/retrain models per fold
+- Portfolio construction is fixed (top quintile, equal weight)
+
+This is a simplified OOS sanity check to verify the signal has some predictive
+power out-of-sample. For production use, extend to include:
+- Cross-validated factor selection
+- Hyperparameter optimization on validation set
+- Model retraining per fold
 """
 
 from __future__ import annotations

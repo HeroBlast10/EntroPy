@@ -26,9 +26,13 @@ universe:
   min_price: 1.0                   # exclude penny stocks (close < $1)
   min_market_cap: 5.0e+7           # $50M minimum market cap
   exclude_otc: true                # exclude OTC / pink sheets
-  # Primary universe source: S&P 500 constituents as of each rebalance
-  # Expandable to Russell 1000/3000
-  index_membership: "sp500"
+  
+  # Dynamic universe: liquidity-filtered large-cap stocks
+  # Selects top N stocks by market cap that meet liquidity threshold
+  # This approximates major indices (e.g., S&P 500) using actual market data
+  top_n_by_mcap: 500               # select top 500 stocks by market cap
+  min_avg_dollar_volume: 5.0e+6    # $5M minimum average daily dollar volume
+  adv_window_days: 30              # window for computing average dollar volume
 
 # --- Adjustment Factor ---
 adjustment:

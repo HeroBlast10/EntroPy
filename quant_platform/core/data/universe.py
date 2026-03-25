@@ -25,6 +25,76 @@ from quant_platform.core.data.schema import UNIVERSE_SCHEMA, validate_dataframe
 from quant_platform.core.utils.io import load_config, resolve_data_path, save_parquet, load_parquet
 
 
+def _apply_dynamic_universe_filter(
+    uni: pd.DataFrame,
+    top_n: int = 500,
+    min_adv: float = 5e6,
+    adv_window: int = 30,
+) -> pd.DataFrame:
+    """Apply dynamic universe filter: top N by market cap + liquidity threshold.
+    
+    This creates a 'liquidity-filtered large-cap universe' that approximates
+    major indices like S&P 500, but is based on actual market data.
+    
+    Parameters
+    ----------
+    uni : DataFrame with [date, ticker, market_cap, close, volume]
+    top_n : int
+        Select top N stocks by market cap on each date (default 500)
+    min_adv : float
+        Minimum average dollar volume over adv_window (default $5M)
+    adv_window : int
+        Window for computing average dollar volume (default 30 days)
+    
+    Returns
+    -------
+    DataFrame with 'in_index' column added
+    """
+    uni = uni.copy()
+    
+    # Compute average dollar volume (ADV) over rolling window
+    uni["dollar_volume"] = uni["close"] * uni["volume"]
+    uni["adv"] = uni.groupby("ticker")["dollar_volume"].transform(
+        lambda x: x.rolling(window=adv_window, min_periods=adv_window // 2).mean()
+    )
+    
+    # For each date, rank stocks by market cap and select top N
+    def select_top_n(group):
+        # Filter by liquidity first
+        liquid = group[group["adv"] >= min_adv]
+        
+        # If market_cap is available, rank by it
+        if not liquid["market_cap"].isna().all():
+            # Rank by market cap (descending)
+            liquid = liquid.sort_values("market_cap", ascending=False)
+            # Select top N
+            top_stocks = liquid.head(top_n)["ticker"].tolist()
+        else:
+            # Fallback: if no market cap, select top N by ADV
+            liquid = liquid.sort_values("adv", ascending=False)
+            top_stocks = liquid.head(top_n)["ticker"].tolist()
+        
+        # Mark selected stocks
+        group["in_index"] = group["ticker"].isin(top_stocks)
+        return group
+    
+    uni = uni.groupby("date", group_keys=False).apply(select_top_n)
+    
+    # Drop temporary columns
+    uni = uni.drop(columns=["dollar_volume", "adv"])
+    
+    # Log statistics
+    total_dates = uni["date"].nunique()
+    avg_in_index = uni.groupby("date")["in_index"].sum().mean()
+    logger.info(
+        "Dynamic universe filter: top %d by market cap + ADV >= $%.1fM, "
+        "avg %.0f stocks per date across %d dates",
+        top_n, min_adv / 1e6, avg_in_index, total_dates,
+    )
+    
+    return uni
+
+
 # ---------------------------------------------------------------------------
 # Core builder
 # ---------------------------------------------------------------------------
@@ -95,8 +165,15 @@ def build_universe(
 
     uni["close_price"] = uni["close"]
 
-    # --- Index membership placeholder (all True if no per-date data) ---
-    uni["in_index"] = True
+    # --- Dynamic universe: top N by market cap + liquidity filter ---
+    # This creates a "liquidity-filtered large-cap universe" similar to S&P 500
+    # but based on actual market data rather than official index constituents
+    uni = _apply_dynamic_universe_filter(
+        uni,
+        top_n=cfg["universe"].get("top_n_by_mcap", 500),
+        min_adv=cfg["universe"].get("min_avg_dollar_volume", 5e6),
+        adv_window=cfg["universe"].get("adv_window_days", 30),
+    )
 
     # --- Apply filters ---
     filters = cfg["universe"]

@@ -15,6 +15,8 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
+import numpy as np
+
 from quant_platform.core.data.calendar import trading_dates
 
 
@@ -69,6 +71,10 @@ def carry_forward_weights(
     """Expand rebalance-day weights to every trading day via forward-fill.
 
     Between rebalances the portfolio holds steady (weights unchanged).
+    
+    CRITICAL FIX: On each rebalance date, we explicitly zero out all stocks
+    that are NOT in the new portfolio. This prevents old positions from being
+    carried forward indefinitely.
 
     Parameters
     ----------
@@ -85,8 +91,35 @@ def carry_forward_weights(
     weights = weights.copy()
     weights["date"] = pd.to_datetime(weights["date"])
 
+    # Get all unique tickers that ever appear in the portfolio
+    all_tickers = weights["ticker"].unique()
+    
+    # Get rebalance dates
+    rebalance_dates_list = sorted(weights["date"].unique())
+    
+    # For each rebalance date, create a complete weight vector
+    # (explicitly setting non-selected stocks to 0)
+    complete_weights = []
+    for reb_date in rebalance_dates_list:
+        # Get weights for this rebalance date
+        reb_weights = weights[weights["date"] == reb_date].set_index("ticker")["weight"]
+        
+        # Create complete vector: all tickers, with 0 for non-selected
+        complete_vector = pd.Series(0.0, index=all_tickers)
+        complete_vector.update(reb_weights)
+        
+        # Store as DataFrame rows
+        for ticker in all_tickers:
+            complete_weights.append({
+                "date": reb_date,
+                "ticker": ticker,
+                "weight": complete_vector[ticker],
+            })
+    
+    complete_df = pd.DataFrame(complete_weights)
+    
     # Pivot to wide: date × ticker
-    wide = weights.pivot(index="date", columns="ticker", values="weight")
+    wide = complete_df.pivot(index="date", columns="ticker", values="weight")
 
     # Reindex to full calendar and forward-fill
     wide = wide.reindex(all_trading_dates).ffill()
@@ -101,7 +134,72 @@ def carry_forward_weights(
     )
 
     # Drop zeros / NaN (stocks not in portfolio)
+    # Keep only non-zero positions
     long = long.dropna(subset=["weight"])
     long = long[long["weight"].abs() > 1e-10].reset_index(drop=True)
 
     return long
+
+
+def validate_portfolio_weights(
+    weights: pd.DataFrame,
+    mode: str = "long_only",
+    tolerance: float = 1e-6,
+) -> None:
+    """Validate portfolio weights satisfy invariants.
+    
+    Checks:
+    - Long-only: sum(weights) = 1 on each date
+    - Long-short: sum(abs(weights)) <= 2 (max gross exposure)
+    - No negative weights in long-only mode
+    
+    Parameters
+    ----------
+    weights : DataFrame [date, ticker, weight]
+    mode : "long_only" or "long_short"
+    tolerance : numerical tolerance for sum checks
+    
+    Raises
+    ------
+    ValueError if invariants are violated
+    """
+    if weights.empty:
+        return
+    
+    # Group by date and check invariants
+    for date, group in weights.groupby("date"):
+        weight_sum = group["weight"].sum()
+        
+        if mode == "long_only":
+            # Check sum = 1
+            if abs(weight_sum - 1.0) > tolerance:
+                logger.error(
+                    "Long-only weights sum to %.4f (not 1.0) on %s. Tickers: %s",
+                    weight_sum,
+                    date,
+                    group[["ticker", "weight"]].to_dict("records"),
+                )
+                raise ValueError(
+                    f"Long-only weights sum to {weight_sum:.4f} (not 1.0) on {date}"
+                )
+            
+            # Check no negative weights
+            if (group["weight"] < -tolerance).any():
+                neg = group[group["weight"] < -tolerance]
+                raise ValueError(
+                    f"Negative weights in long-only mode on {date}: {neg.to_dict('records')}"
+                )
+        
+        elif mode == "long_short":
+            # Check gross exposure <= 2 (100% long + 100% short)
+            gross_exposure = group["weight"].abs().sum()
+            if gross_exposure > 2.0 + tolerance:
+                raise ValueError(
+                    f"Gross exposure {gross_exposure:.4f} > 2.0 on {date}"
+                )
+    
+    logger.info(
+        "Portfolio weights validated: mode=%s, %d dates, all invariants satisfied",
+        mode,
+        weights["date"].nunique(),
+    )

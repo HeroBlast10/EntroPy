@@ -138,10 +138,15 @@ class QuantilePortfolio(PortfolioConstructor):
                 w = pd.Series(1.0 / n, index=tickers)
 
         elif cfg.weight_scheme == WeightScheme.INVERSE_VOL:
-            # Requires volatility data — attempt to compute from signal df
-            # For now, use equal weight as fallback
-            w = pd.Series(1.0 / n, index=tickers)
-            logger.debug("inverse_vol weighting: using equal weight fallback")
+            # Inverse-volatility weighting: weight_i = (1/σ_i) / Σ(1/σ_j)
+            # This is naive risk parity — equal risk contribution
+            w = self._compute_inverse_vol_weights(
+                tickers, date, full_signal, universe
+            )
+            if w.empty:
+                # Fallback to equal weight if volatility computation fails
+                w = pd.Series(1.0 / n, index=tickers)
+                logger.debug("inverse_vol weighting: volatility data unavailable, using equal weight")
 
         else:
             w = pd.Series(1.0 / n, index=tickers)
@@ -155,6 +160,124 @@ class QuantilePortfolio(PortfolioConstructor):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _compute_inverse_vol_weights(
+        self,
+        tickers: pd.Index,
+        date: pd.Timestamp,
+        signal: pd.DataFrame,
+        universe: pd.DataFrame,
+    ) -> pd.Series:
+        """Compute inverse-volatility weights for selected tickers.
+        
+        Volatility is computed as rolling std of returns over a lookback window.
+        Weight_i = (1 / σ_i) / Σ(1 / σ_j)
+        
+        This implements naive risk parity: each stock contributes equal risk.
+        
+        Parameters
+        ----------
+        tickers : selected tickers to weight
+        date : current rebalance date
+        signal : full signal DataFrame (may contain prices if available)
+        universe : universe DataFrame (may contain volatility data)
+        
+        Returns
+        -------
+        Series of weights indexed by ticker, or empty Series if computation fails
+        """
+        # Try to get volatility from universe first (pre-computed)
+        uni_today = universe.loc[universe["date"] == date]
+        if "volatility" in uni_today.columns:
+            vol = uni_today.set_index("ticker")["volatility"].reindex(tickers)
+            vol = vol.dropna()
+            if len(vol) >= len(tickers) * 0.5:  # At least 50% coverage
+                return self._weights_from_volatility(vol)
+        
+        # Otherwise, try to compute from prices in signal DataFrame
+        if "adj_close" in signal.columns or "close" in signal.columns:
+            price_col = "adj_close" if "adj_close" in signal.columns else "close"
+            vol = self._compute_rolling_volatility(
+                signal, tickers, date, price_col, window=63
+            )
+            if not vol.empty:
+                return self._weights_from_volatility(vol)
+        
+        # If all else fails, return empty (caller will use equal weight fallback)
+        return pd.Series(dtype=float)
+    
+    @staticmethod
+    def _weights_from_volatility(vol: pd.Series) -> pd.Series:
+        """Convert volatility series to inverse-vol weights.
+        
+        weight_i = (1 / σ_i) / Σ(1 / σ_j)
+        """
+        # Handle zero or near-zero volatility
+        vol = vol.clip(lower=1e-6)
+        
+        # Inverse volatility
+        inv_vol = 1.0 / vol
+        
+        # Normalize to sum to 1
+        weights = inv_vol / inv_vol.sum()
+        
+        return weights
+    
+    @staticmethod
+    def _compute_rolling_volatility(
+        signal: pd.DataFrame,
+        tickers: pd.Index,
+        date: pd.Timestamp,
+        price_col: str = "adj_close",
+        window: int = 63,
+    ) -> pd.Series:
+        """Compute rolling volatility from price data.
+        
+        Parameters
+        ----------
+        signal : DataFrame with [date, ticker, price_col]
+        tickers : tickers to compute volatility for
+        date : current date
+        price_col : column name for prices
+        window : lookback window in trading days (default 63 = ~3 months)
+        
+        Returns
+        -------
+        Series of volatility indexed by ticker
+        """
+        # Filter to relevant tickers and dates up to current date
+        sig = signal[["date", "ticker", price_col]].copy()
+        sig["date"] = pd.to_datetime(sig["date"])
+        sig = sig[sig["ticker"].isin(tickers)]
+        sig = sig[sig["date"] <= date]
+        
+        if sig.empty:
+            return pd.Series(dtype=float)
+        
+        # Compute returns and rolling volatility for each ticker
+        vol_list = []
+        for ticker in tickers:
+            ticker_data = sig[sig["ticker"] == ticker].sort_values("date")
+            
+            if len(ticker_data) < window:
+                continue  # Not enough history
+            
+            # Compute returns
+            ticker_data = ticker_data.copy()
+            ticker_data["return"] = ticker_data[price_col].pct_change()
+            
+            # Rolling volatility (annualized)
+            recent_returns = ticker_data["return"].iloc[-window:]
+            vol = recent_returns.std() * np.sqrt(252)  # Annualize
+            
+            if pd.notna(vol) and vol > 0:
+                vol_list.append({"ticker": ticker, "volatility": vol})
+        
+        if not vol_list:
+            return pd.Series(dtype=float)
+        
+        vol_df = pd.DataFrame(vol_list)
+        return vol_df.set_index("ticker")["volatility"]
 
     @staticmethod
     def _detect_signal_col(signal: pd.DataFrame) -> str:
