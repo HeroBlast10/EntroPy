@@ -2,6 +2,103 @@
 
 All notable changes to EntroPy are documented in this file.
 
+## [0.8.0] — 2026-03-25
+
+### Added — ML-Based Alpha Model
+- `quant_platform/core/alpha_models/ml_alpha.py` — Ridge/Lasso/ElasticNet cross-sectional regression with Purged K-Fold CV (Lopez de Prado) to prevent look-ahead bias in time-series data
+- `PurgedKFold` class — time-series cross-validation with embargo period (default 1%) between train/test splits
+- `MLAlphaModel` class — regularized linear regression with feature standardization, coefficient-based feature importance, and cross-validation metrics (R², IC)
+- `WalkForwardMLAlpha` class — expanding-window walk-forward retraining (default: refit every 21 days, min 252 days training), tracks feature importance evolution across models
+- `tests/test_ml_alpha.py` — comprehensive tests for Purged K-Fold splits, model training/prediction, cross-validation, walk-forward retraining, and edge cases (missing features, regularization strength, Lasso feature selection)
+
+### Added — Barra-Style Factor Risk Model
+- `quant_platform/core/portfolio/risk_model.py` — extended from simple covariance to full Barra-style factor decomposition
+- Factor exposure estimation via time-series regression (Market, Size, Value betas) with configurable lookback (default 252 days) and minimum observations (default 20)
+- Factor covariance matrix using EWMA (default halflife 60 days) + Ledoit-Wolf shrinkage (default 0.5)
+- Specific risk estimation from regression residuals (annualized standard deviation of idiosyncratic returns)
+- Portfolio risk decomposition: `decompose_risk()` breaks down total portfolio variance into factor risk (per-factor contributions) and specific risk components
+- Getter methods for exposures, factor covariance, and specific risk with validation
+- `tests/test_factor_risk_model.py` — tests for exposure estimation accuracy, covariance matrix properties, specific risk calculation, full model fit, risk decomposition (including market-neutral portfolios), and error handling
+
+### Added — VaR/CVaR Risk Metrics
+- `quant_platform/core/evaluation/risk_metrics.py` — three VaR methods (Historical, Parametric Gaussian, Cornish-Fisher with skew/kurtosis adjustment) plus CVaR (Conditional VaR / Expected Shortfall)
+- `compute_var()` — supports 95%, 99%, 99.9% confidence levels with method selection
+- `compute_cvar()` — expected loss beyond VaR threshold
+- `compute_rolling_var()` — time-series of VaR estimates for visualization
+- `quant_platform/core/evaluation/risk_plots.py` — visualization functions: rolling VaR chart, return distribution with VaR/CVaR markers, VaR method comparison
+- `tests/test_risk_metrics.py` — tests for all VaR methods, CVaR calculation, rolling VaR, edge cases (insufficient data, extreme confidence levels)
+
+### Added — Benchmark Analytics
+- `quant_platform/core/data/benchmark.py` — equal-weight benchmark construction from universe
+- `quant_platform/core/evaluation/benchmark_analytics.py` — CAPM-style analytics: Alpha, Beta, Information Ratio, Treynor Ratio, tracking error, active return
+- `quant_platform/core/evaluation/benchmark_plots.py` — cumulative return comparison, rolling alpha/beta, scatter plot with regression line
+- `tests/test_benchmark_analytics.py` — tests for all benchmark metrics and edge cases
+
+### Added — Value/Quality Factors
+- `quant_platform/core/signals/cross_sectional/value_quality.py` — four Fama-French style factors:
+  - `BOOK_TO_MARKET` — book value / market cap (value factor)
+  - `EARNINGS_YIELD` — trailing 12-month earnings / market cap
+  - `ROE` — return on equity (net income / book equity)
+  - `GROSS_PROFITABILITY` — (revenue - COGS) / total assets (Novy-Marx 2013)
+- All factors use SimFin fundamentals with 45-day publication lag to avoid look-ahead bias
+- `tests/test_value_quality_factors.py` — tests for all four factors with synthetic fundamental data
+
+### Added — Inverse-Volatility Weighting
+- `quant_platform/core/portfolio/quantile.py` — added inverse-volatility weighting (naive risk parity) as fourth weighting scheme
+- `_compute_inverse_vol_weights()` — three-tier fallback: precomputed volatility from universe → computed rolling volatility from prices (63-day window, annualized) → equal weight
+- `_compute_rolling_volatility()` — point-in-time rolling volatility calculation with proper date alignment
+- `tests/test_inverse_vol_weighting.py` — tests for volatility-to-weight conversion, rolling volatility calculation, integration, fallbacks, and edge cases
+
+### Added — Type-Aware Evaluation System
+- `quant_platform/core/signals/evaluation/` — new module with four signal-type-specific scorecards
+- `router.py` — dispatches signals to appropriate scorecard based on `FactorMeta.signal_type`
+- `cross_sectional.py` — IC, RankIC, IC IR, hit rate, monotonicity (Q5-Q1 spread), turnover
+- `time_series.py` — hit rate, directional accuracy, directional Sharpe, mean absolute error
+- `regime.py` — baseline vs. overlay Sharpe/drawdown comparison, regime detection rate, exposure reduction
+- `relative_value.py` — half-life, ADF stationarity test, mean reversion quality (R²), spread Sharpe, entry/exit ratio
+- Each signal type now evaluated with metrics appropriate to its purpose (e.g., Kalman velocity evaluated on hit rate, not IC)
+
+### Added — Dynamic Universe Filtering
+- `quant_platform/core/data/universe.py` — replaced placeholder `in_index=True` with dynamic filtering
+- `_apply_dynamic_universe_filter()` — selects top N stocks (default 500) by market cap that meet liquidity threshold (default $5M ADV over 30 days)
+- Creates "liquidity-filtered large-cap universe" that approximates major indices using actual market data, not official constituent lists
+- `config/settings.yaml` — added `top_n_by_mcap`, `min_avg_dollar_volume`, `adv_window_days` parameters
+
+### Fixed — Position Forward-Fill Bug (CRITICAL)
+- `quant_platform/core/portfolio/rebalance.py` — fixed `carry_forward_weights()` to explicitly zero out old positions on rebalance dates
+- Previous implementation caused weights to accumulate (e.g., summing to 5.66 instead of 1.0) due to stale positions being carried forward indefinitely
+- New implementation creates complete weight vector for all tickers on each rebalance date (selected stocks = actual weight, non-selected = 0.0) before forward-filling
+- Added `validate_portfolio_weights()` function to check invariants: long-only sum=1.0, no negative weights, gross exposure ≤ 2.0 for long-short
+- `tests/test_rebalance.py` — added tests for weight sum invariant, old position zeroing, and validation function
+
+### Fixed — Signal Mismatch in Report Generation
+- `quant_platform/core/evaluation/report.py` — changed from warning to error when backtest signal ≠ report signal
+- Previously allowed generating inconsistent reports where NAV/performance reflected factor A but IC analysis used factor B
+- Now raises `ValueError` with clear instructions to re-run backtest or use correct signal
+- Prevents misleading reports that mix different factors' metrics
+
+### Fixed — Documentation Accuracy
+- `quant_platform/core/evaluation/walkforward.py` — downgraded claims from "walk-forward validation framework" to "simple rolling OOS check"
+- Explicitly documented limitations: no per-fold factor selection, no parameter tuning, no model retraining, fixed portfolio construction
+- `quant_platform/core/signals/relative_value/ou_pairs.py` — clarified that `OU_ZSCORE` is single-stock mean reversion, not pairs trading
+- Added warning that true pairs trading requires cointegration testing, spread construction, and OU fitting on spreads (not individual prices)
+- `README.md` — updated all references to reflect accurate capabilities
+
+### Changed — README Rewrite (Research Focus)
+- Shifted focus from dashboard/paper trading to research question and methodology
+- Added **Research Question** section: "Do state-space / regime / entropy features provide verifiable incremental alpha?"
+- Added **Data** section: universe definition, period, PIT discipline
+- Added **Methodology** section: signal library (30+ signals, four types), alpha models, portfolio construction, risk management, transaction costs, validation
+- Added **Ablation Design** table: 7 scenarios (baseline, +value, +kalman, +noise, +regime, ML alpha, full ensemble)
+- Added **Known Limitations** section: 6 honest limitations (approximate universe, simplified OOS, single-stock OU, no intraday data, simplified risk model, linear ML)
+- Updated **Architecture** diagram to reflect new modules (evaluation scorecards, ML alpha, risk decomposition)
+- Removed IB paper trading and Streamlit dashboard from prominence (still available but not featured)
+
+### Changed — .gitignore
+- Added 11 implementation/interview prep `.md` files to `.gitignore`:
+  - `RESUME_AND_INTERVIEW_PREP.md`, `VALUE_QUALITY_IMPLEMENTATION.md`, `ML_ALPHA_IMPLEMENTATION.md`, `FACTOR_RISK_MODEL_IMPLEMENTATION.md`, `VAR_CVAR_IMPLEMENTATION.md`, `BENCHMARK_IMPLEMENTATION.md`, `INVERSE_VOL_IMPLEMENTATION.md`, `IMPROVEMENT_ROADMAP.md`, `BUGFIX_SUMMARY.md`, `ACCURACY_FIXES_SUMMARY.md`, `EVALUATION_SYSTEM_DESIGN.md`
+- These files remain local for personal interview preparation but are excluded from the public repository
+
 ## [0.7.0] — 2026-03-19
 
 ### Added — All-Factor Comparison & Auto‑Best Selection
