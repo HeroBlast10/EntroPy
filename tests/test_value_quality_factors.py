@@ -42,7 +42,7 @@ def sample_prices():
 def sample_fundamentals():
     """Generate sample fundamentals data with quarterly reports."""
     dates = pd.date_range("2023-01-01", periods=5, freq="D")
-    report_dates = pd.date_range("2022-09-30", periods=4, freq="Q")
+    report_dates = pd.date_range("2022-09-30", periods=4, freq="QE")
     tickers = ["AAPL", "MSFT"]
     
     data = []
