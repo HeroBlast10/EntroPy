@@ -95,7 +95,15 @@ def next_trading_day(
 ) -> pd.Timestamp:
     cal = _get_calendar(exchange)
     ts = pd.Timestamp(dt)
-    return cal.next_session(ts)
+    try:
+        # If ts is already a session, next_session still works
+        return cal.next_session(ts)
+    except (ValueError, xcals.errors.NotSessionError, xcals.errors.RequestedSessionOutOfBounds):
+        # ts is outside the calendar's valid range — try date_to_session
+        try:
+            return cal.date_to_session(ts, direction="next")
+        except Exception:
+            return pd.NaT
 
 
 def align_to_calendar(

@@ -163,6 +163,21 @@ def main(factors, evaluate, list_factors, periods):
                     else:
                         click.echo(f"    {k}: {v}")
 
+            # Persist type-specific results
+            import json
+            import numpy as _np
+            typed_path = resolve_data_path("factors", "typed_factor_evaluation.json")
+            typed_path.parent.mkdir(parents=True, exist_ok=True)
+            serializable = {}
+            for fc, result in typed_results.items():
+                factor_cls = reg.get(fc)
+                entry = {"signal_type": factor_cls.meta.signal_type}
+                for k, v in result.items():
+                    entry[k] = float(v) if isinstance(v, (int, float, _np.floating)) else str(v)
+                serializable[fc] = entry
+            typed_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+            click.echo(f"\n✓ Type-specific evaluation saved → {typed_path}")
+
 
 if __name__ == "__main__":
     main()

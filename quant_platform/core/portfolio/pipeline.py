@@ -151,7 +151,8 @@ def run_portfolio_pipeline(
 
     # --- Save ---
     if output_path is None:
-        suffix = f"{method}_{config.mode.value}_{config.rebalance_freq}"
+        safe_signal = str(signal_col).replace(" ", "_") if signal_col else "unknown"
+        suffix = f"{safe_signal}_{method}_{config.mode.value}_{config.rebalance_freq}"
         output_path = resolve_data_path("portfolio", f"weights_{suffix}.parquet")
 
     save_parquet(daily_weights, output_path)

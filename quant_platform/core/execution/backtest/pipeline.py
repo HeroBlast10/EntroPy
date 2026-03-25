@@ -111,6 +111,31 @@ def run_trading_pipeline(
     perf_df = pd.DataFrame([perf])
     perf_df.to_csv(output_dir / "performance_summary.csv", index=False)
 
+    # Save backtest metadata for artifact lineage
+    import json
+    bt_meta = {
+        "weights_path": str(weights_path),
+        "cost_model": {
+            "slippage_bps": cost_model.slippage_bps,
+            "impact_coeff": cost_model.impact_coeff,
+        },
+        "initial_capital": initial_capital,
+        "start_date": perf.get("start_date"),
+        "end_date": perf.get("end_date"),
+    }
+    # Carry forward signal_col from portfolio metadata if available
+    portfolio_meta_path = resolve_data_path("portfolio", "metadata.json")
+    if portfolio_meta_path.exists():
+        try:
+            pmeta = json.loads(portfolio_meta_path.read_text(encoding="utf-8"))
+            bt_meta["signal_col"] = pmeta.get("signal_col")
+            bt_meta["portfolio_method"] = pmeta.get("method")
+        except Exception:
+            pass
+    bt_meta_path = output_dir / "backtest_metadata.json"
+    bt_meta_path.write_text(json.dumps(bt_meta, indent=2, default=str), encoding="utf-8")
+    logger.info("Backtest metadata saved → {}", bt_meta_path)
+
     # Log headline
     logger.info("=" * 60)
     logger.info("BACKTEST RESULTS")

@@ -237,18 +237,24 @@ def generate_report(
         sections.append("<p><em>No backtest results found.</em></p>")
 
     # ============================
-    # Section 2: Factor Comparison (All Factors)
+    # Section 2: Factor Comparison
     # ============================
     cmp_path = resolve_data_path("factors", "factor_comparison.csv")
+    typed_path = resolve_data_path("factors", "typed_factor_evaluation.json")
+    n_cs = 0
+    n_typed = 0
     if cmp_path.exists():
         try:
             comparison = pd.read_csv(cmp_path, index_col=0)
-            sections.append("<h2>2. Factor Comparison (All Factors)</h2>")
+            n_cs = len(comparison)
             sections.append(
-                "<p>Metrics computed against 1-day forward return. "
+                f"<h2>2. Factor Comparison \u2014 Cross-Sectional ({n_cs} factors)</h2>"
+            )
+            sections.append(
+                "<p>IC-based metrics computed against 1-day forward return. "
                 "<strong>ric_mean_ic</strong> = Rank IC mean, "
                 "<strong>ric_icir</strong> = annualised ICIR, "
-                "<strong>ls_sharpe</strong> = long–short annualised Sharpe.</p>"
+                "<strong>ls_sharpe</strong> = long\u2013short annualised Sharpe.</p>"
             )
             sections.append('<div class="section">')
             sections.append(_df_to_html(comparison, precision=4))
@@ -259,16 +265,48 @@ def generate_report(
                 logger.info("Auto-selected best factor: {}", signal_col)
             if best:
                 sections.append(
-                    f"<p><strong>Best factor (by ric_mean_ic): {best}</strong></p>"
+                    f"<p><strong>Best cross-sectional factor (by ric_mean_ic): {best}</strong></p>"
                 )
         except Exception as exc:
             sections.append(f"<p><em>Could not load factor comparison: {exc}</em></p>")
             logger.warning("Factor comparison load failed: {}", exc)
     else:
-        sections.append("<h2>2. Factor Comparison (All Factors)</h2>")
+        sections.append("<h2>2. Factor Comparison</h2>")
         sections.append(
             "<p><em>No factor_comparison.csv found. "
             "Run <code>python scripts/build_factors.py --evaluate</code> to generate it.</em></p>"
+        )
+
+    # --- Type-specific evaluation (time_series / regime / relative_value) ---
+    if typed_path.exists():
+        try:
+            typed_data = json.loads(typed_path.read_text(encoding="utf-8"))
+            n_typed = len(typed_data)
+            sections.append(
+                f"<h2>2b. Type-Specific Evaluation ({n_typed} factors)</h2>"
+            )
+            sections.append(
+                "<p>Non-cross-sectional factors evaluated with their own scorecards "
+                "(time-series, regime, relative-value).</p>"
+            )
+            rows = []
+            for fname, metrics in typed_data.items():
+                row = {"factor": fname}
+                row.update(metrics)
+                rows.append(row)
+            typed_df = pd.DataFrame(rows).set_index("factor")
+            sections.append('<div class="section">')
+            sections.append(_df_to_html(typed_df, precision=4))
+            sections.append("</div>")
+        except Exception as exc:
+            sections.append(f"<p><em>Could not load typed evaluation: {exc}</em></p>")
+            logger.warning("Typed evaluation load failed: {}", exc)
+
+    # Summary count across both evaluation types
+    if n_cs + n_typed > 0:
+        sections.append(
+            f"<p><em>Total evaluated: {n_cs} cross-sectional + {n_typed} type-specific "
+            f"= {n_cs + n_typed} factors.</em></p>"
         )
 
     # ============================

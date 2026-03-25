@@ -29,6 +29,17 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+try:
+    from numba import jit
+    _NUMBA_AVAILABLE = True
+except ImportError:
+    _NUMBA_AVAILABLE = False
+    def jit(*args, **kwargs):
+        """Dummy decorator when numba is not available."""
+        def decorator(func):
+            return func
+        return decorator if not args else decorator(args[0])
+
 from quant_platform.core.signals.base import FactorBase, FactorMeta
 
 
@@ -43,6 +54,7 @@ def _daily_returns(group: pd.Series) -> pd.Series:
     return group.pct_change()
 
 
+@jit(nopython=True, cache=True)
 def _ols_residual_std(y: np.ndarray, x: np.ndarray) -> float:
     """OLS residual standard deviation (single regressor)."""
     mask = np.isfinite(y) & np.isfinite(x)
@@ -57,6 +69,90 @@ def _ols_residual_std(y: np.ndarray, x: np.ndarray) -> float:
     alpha = ym.mean() - beta * xm.mean()
     resid = ym - (alpha + beta * xm)
     return float(np.std(resid, ddof=1))
+
+
+@jit(nopython=True, cache=True)
+def _rolling_downside_std(arr: np.ndarray, window: int, min_periods: int) -> np.ndarray:
+    """Fast rolling downside semi-deviation (only negative values).
+    
+    Parameters
+    ----------
+    arr : 1D array of returns
+    window : rolling window size
+    min_periods : minimum observations required
+    
+    Returns
+    -------
+    Array of rolling downside std (same length as input)
+    """
+    n = len(arr)
+    out = np.full(n, np.nan)
+    
+    for i in range(window - 1, n):
+        w = arr[i - window + 1:i + 1]
+        # Filter to negative returns only
+        neg = w[w < 0]
+        if len(neg) >= min_periods:
+            out[i] = np.sqrt(np.mean(neg ** 2))
+        elif len(w[np.isfinite(w)]) >= min_periods:
+            out[i] = 0.0  # No negative returns in window
+    
+    return out
+
+
+@jit(nopython=True, cache=True)
+def _rolling_cvar(arr: np.ndarray, window: int, min_periods: int, quantile: float = 0.05) -> np.ndarray:
+    """Fast rolling CVaR (Expected Shortfall).
+    
+    Parameters
+    ----------
+    arr : 1D array of returns
+    window : rolling window size
+    min_periods : minimum observations required
+    quantile : tail quantile (default 5%)
+    
+    Returns
+    -------
+    Array of rolling CVaR (same length as input)
+    """
+    n = len(arr)
+    out = np.full(n, np.nan)
+    
+    for i in range(window - 1, n):
+        w = arr[i - window + 1:i + 1]
+        valid = w[np.isfinite(w)]
+        if len(valid) >= min_periods:
+            threshold = np.quantile(valid, quantile)
+            tail = valid[valid <= threshold]
+            if len(tail) > 0:
+                out[i] = np.mean(tail)
+    
+    return out
+
+
+@jit(nopython=True, cache=True)
+def _rolling_idiovol(ret: np.ndarray, mkt_ret: np.ndarray, window: int) -> np.ndarray:
+    """Fast rolling idiosyncratic volatility via CAPM.
+    
+    Parameters
+    ----------
+    ret : 1D array of stock returns
+    mkt_ret : 1D array of market returns (aligned)
+    window : rolling window size
+    
+    Returns
+    -------
+    Array of rolling idiosyncratic vol (annualized)
+    """
+    n = len(ret)
+    out = np.full(n, np.nan)
+    
+    for i in range(window, n):
+        y_w = ret[i - window:i]
+        x_w = mkt_ret[i - window:i]
+        out[i] = _ols_residual_std(y_w, x_w)
+    
+    return out * np.sqrt(252.0)
 
 
 # ===================================================================
@@ -126,20 +222,17 @@ class IdioVol(FactorBase):
         mkt = df.groupby("date")["ret"].mean().rename("mkt_ret")
         df = df.merge(mkt, on="date", how="left")
 
-        window = 60
+        # Fast vectorized computation using Numba
+        def _compute_idiovol(group: pd.DataFrame) -> pd.Series:
+            ret_arr = group["ret"].values
+            mkt_arr = group["mkt_ret"].values
+            result = _rolling_idiovol(ret_arr, mkt_arr, window=60)
+            return pd.Series(result, index=group.index)
 
-        def _idio(sub: pd.DataFrame) -> pd.Series:
-            out = pd.Series(np.nan, index=sub.index)
-            y_arr = sub["ret"].values
-            x_arr = sub["mkt_ret"].values
-            for i in range(window, len(sub)):
-                y_w = y_arr[i - window:i]
-                x_w = x_arr[i - window:i]
-                out.iloc[i] = _ols_residual_std(y_w, x_w)
-            return out * _ANN
-
-        return df.groupby("ticker", group_keys=False).apply(_idio).droplevel(0) \
-            if "ticker" in df.columns else pd.Series(dtype="float64")
+        if "ticker" not in df.columns:
+            return pd.Series(dtype="float64")
+        
+        return df.groupby("ticker", group_keys=False).apply(_compute_idiovol)
 
 
 class Skew60D(FactorBase):
@@ -194,15 +287,14 @@ class DownVol60D(FactorBase):
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
         ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
-        neg_ret = ret.where(ret < 0, 0.0)
 
-        def _semi_std(s: pd.Series) -> pd.Series:
-            return s.rolling(60, min_periods=40).apply(
-                lambda w: np.sqrt((w[w < 0] ** 2).mean()) if (w < 0).any() else 0.0,
-                raw=True,
-            ) * _ANN
+        # Fast vectorized computation using Numba
+        def _compute_downvol(group: pd.Series) -> pd.Series:
+            arr = group.values
+            result = _rolling_downside_std(arr, window=60, min_periods=40)
+            return pd.Series(result * _ANN, index=group.index)
 
-        return neg_ret.groupby(df["ticker"]).transform(_semi_std)
+        return ret.groupby(df["ticker"]).transform(_compute_downvol)
 
 
 class TailRisk(FactorBase):
@@ -221,14 +313,13 @@ class TailRisk(FactorBase):
         df = prices.sort_values(["ticker", "date"])
         ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
 
-        def _cvar(s: pd.Series) -> pd.Series:
-            return s.rolling(60, min_periods=40).apply(
-                lambda w: w[w <= np.nanquantile(w, 0.05)].mean()
-                if len(w[np.isfinite(w)]) >= 10 else np.nan,
-                raw=True,
-            )
+        # Fast vectorized computation using Numba
+        def _compute_cvar(group: pd.Series) -> pd.Series:
+            arr = group.values
+            result = _rolling_cvar(arr, window=60, min_periods=40, quantile=0.05)
+            return pd.Series(result, index=group.index)
 
-        return ret.groupby(df["ticker"]).transform(_cvar)
+        return ret.groupby(df["ticker"]).transform(_compute_cvar)
 
 
 class VolOfVol(FactorBase):

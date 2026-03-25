@@ -50,9 +50,11 @@ def _setup_simfin(api_key: Optional[str] = None, data_dir: Optional[str] = None)
         return
     key = api_key or os.environ.get("SIMFIN_API_KEY", "free")
     sf.set_api_key(key)
-    if data_dir:
-        sf.set_data_dir(data_dir)
-    logger.debug("SimFin configured (api_key={}…)", key[:4])
+    # SimFin requires a data directory; default to ~/simfin_data/
+    if data_dir is None:
+        data_dir = os.path.join(os.path.expanduser("~"), "simfin_data")
+    sf.set_data_dir(data_dir)
+    logger.debug("SimFin configured (api_key={}…, data_dir={})", key[:4], data_dir)
 
 
 def _fetch_simfin_statements(variant: str = "free") -> Dict[str, pd.DataFrame]:
@@ -123,6 +125,138 @@ def _fetch_market_cap_yf(
     out = date_df.merge(shares_df, on="_key").drop(columns="_key")
     out["market_cap"] = np.nan  # will be filled by caller using close prices
     return out
+
+
+# ---------------------------------------------------------------------------
+# yfinance fallback for financial statements
+# ---------------------------------------------------------------------------
+
+def _fetch_financials_yf(
+    tickers: List[str],
+    lag_days: int,
+) -> pd.DataFrame:
+    """Fetch quarterly financial statements from yfinance as a fallback.
+
+    Pulls income statement, balance sheet, and cash flow for each ticker,
+    then maps them to the project schema.  ``publish_date`` is approximated
+    as ``report_date + 45 days`` (SEC 10-Q deadline for large accelerated
+    filers), and point-in-time lag is applied on top.
+    """
+    all_records: List[Dict] = []
+
+    for tkr in tqdm(tickers, desc="Fetching financials (yfinance)"):
+        try:
+            t = yf.Ticker(tkr)
+
+            # --- Income statement (quarterly) ---
+            inc = t.quarterly_income_stmt
+            bal = t.quarterly_balance_sheet
+            cf = t.quarterly_cashflow
+
+            # Collect all report dates across statements
+            report_dates = set()
+            if inc is not None and not inc.empty:
+                report_dates.update(inc.columns)
+            if bal is not None and not bal.empty:
+                report_dates.update(bal.columns)
+            if cf is not None and not cf.empty:
+                report_dates.update(cf.columns)
+
+            for rd in report_dates:
+                row: Dict = {
+                    "ticker": tkr,
+                    "report_date": pd.Timestamp(rd),
+                }
+
+                # Income statement fields
+                if inc is not None and rd in inc.columns:
+                    col = inc[rd]
+                    row["revenue"] = _safe_get(col, ["Total Revenue", "Revenue"])
+                    row["gross_profit"] = _safe_get(col, ["Gross Profit"])
+                    row["operating_income"] = _safe_get(
+                        col, ["Operating Income", "EBIT"]
+                    )
+                    row["net_income"] = _safe_get(
+                        col, ["Net Income", "Net Income Common Stockholders"]
+                    )
+                    row["eps_diluted"] = _safe_get(
+                        col, ["Diluted EPS", "Basic EPS"]
+                    )
+
+                # Balance sheet fields
+                if bal is not None and rd in bal.columns:
+                    col = bal[rd]
+                    row["total_assets"] = _safe_get(col, ["Total Assets"])
+                    row["total_liabilities"] = _safe_get(
+                        col,
+                        ["Total Liabilities Net Minority Interest",
+                         "Total Liab"],
+                    )
+                    row["total_equity"] = _safe_get(
+                        col,
+                        ["Total Equity Gross Minority Interest",
+                         "Stockholders Equity",
+                         "Total Stockholder Equity"],
+                    )
+                    row["cash_and_equivalents"] = _safe_get(
+                        col,
+                        ["Cash And Cash Equivalents",
+                         "Cash Cash Equivalents And Short Term Investments"],
+                    )
+                    row["total_debt"] = _safe_get(col, ["Total Debt"])
+                    row["shares_outstanding"] = _safe_get(
+                        col, ["Share Issued", "Ordinary Shares Number"]
+                    )
+
+                # Cash flow fields
+                if cf is not None and rd in cf.columns:
+                    col = cf[rd]
+                    row["cash_from_operations"] = _safe_get(
+                        col,
+                        ["Operating Cash Flow",
+                         "Cash Flowsfromusedin Operating Activities Direct"],
+                    )
+                    row["capex"] = _safe_get(
+                        col, ["Capital Expenditure"]
+                    )
+                    row["free_cash_flow"] = _safe_get(
+                        col, ["Free Cash Flow"]
+                    )
+
+                all_records.append(row)
+
+        except Exception as exc:
+            logger.debug("yfinance financials failed for {}: {}", tkr, exc)
+            continue
+
+    if not all_records:
+        logger.warning("yfinance returned no financial statements")
+        return pd.DataFrame()
+
+    fund = pd.DataFrame(all_records)
+    fund["report_date"] = pd.to_datetime(fund["report_date"])
+
+    # Approximate publish_date as report_date + 45 days (SEC 10-Q deadline)
+    fund["publish_date"] = fund["report_date"] + pd.Timedelta(days=45)
+
+    # Apply point-in-time lag
+    fund = _apply_pit_lag(fund, "publish_date", lag_days)
+
+    logger.info(
+        "yfinance financials: {} rows from {} tickers",
+        len(fund), fund["ticker"].nunique(),
+    )
+    return fund
+
+
+def _safe_get(series: pd.Series, keys: List[str]) -> Optional[float]:
+    """Try multiple row labels, return the first non-NaN value found."""
+    for k in keys:
+        if k in series.index:
+            v = series[k]
+            if pd.notna(v):
+                return float(v)
+    return np.nan
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +388,12 @@ def build_fundamentals(
     fund = _merge_simfin_statements(stmts, lag_days)
 
     if fund.empty:
-        logger.warning("SimFin returned no data – using yfinance market-cap fallback")
+        logger.warning("SimFin returned no data – falling back to yfinance financials")
+        fund = _fetch_financials_yf(tickers, lag_days)
+
+    # If yfinance financials also returned nothing, fall back to market-cap only
+    if fund.empty:
+        logger.warning("yfinance financials also empty – using market-cap-only fallback")
         dates = trading_dates()
         fund = _fetch_market_cap_yf(tickers, dates)
 

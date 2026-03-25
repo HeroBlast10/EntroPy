@@ -176,7 +176,10 @@ def compute_capm_alpha_beta(
     n = len(y)
     residual_var = ss_res / (n - 2)  # degrees of freedom = n - 2
     X_var = np.var(X, ddof=1)
-    se_alpha = np.sqrt(residual_var * (1/n + X.mean()**2 / (n * X_var)))
+    if X_var == 0:
+        se_alpha = np.nan
+    else:
+        se_alpha = np.sqrt(residual_var * (1/n + X.mean()**2 / (n * X_var)))
     
     alpha_tstat = alpha_daily / se_alpha if se_alpha > 0 else np.nan
     alpha_pvalue = 2 * (1 - stats.t.cdf(abs(alpha_tstat), df=n-2)) if not np.isnan(alpha_tstat) else np.nan
