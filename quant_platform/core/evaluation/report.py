@@ -157,9 +157,28 @@ def generate_report(
     weights_dir = resolve_data_path("portfolio")
     daily_weights = None
     if weights_dir.exists():
-        wfiles = sorted(weights_dir.glob("weights_*.parquet"))
-        if wfiles:
-            daily_weights = load_parquet(wfiles[-1])
+        # Try to read from metadata.json first (more reliable)
+        meta_path = resolve_data_path("portfolio", "metadata.json")
+        weights_path = None
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                weights_filename = meta.get("weights_filename")
+                if weights_filename:
+                    weights_path = weights_dir / weights_filename
+                    if not weights_path.exists():
+                        weights_path = None
+            except Exception:
+                pass
+        
+        # Fallback to sorted glob if metadata not available
+        if weights_path is None:
+            wfiles = sorted(weights_dir.glob("weights_*.parquet"))
+            if wfiles:
+                weights_path = wfiles[-1]
+        
+        if weights_path:
+            daily_weights = load_parquet(weights_path)
             daily_weights["date"] = pd.to_datetime(daily_weights["date"])
 
     # --- Load portfolio metadata to detect backtest signal ---

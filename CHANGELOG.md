@@ -56,6 +56,23 @@ All notable changes to EntroPy are documented in this file.
 
 **Test Results:** All 149 tests pass, zero regressions
 
+### Fixed — Artifact Lineage Robustness (Critical)
+
+**Backtest/Report Auto-Detect Logic**
+- `quant_platform/core/execution/backtest/pipeline.py:52-78` — replaced fragile `sorted(glob("weights_*.parquet"))[-1]` with metadata-first approach
+- `quant_platform/core/evaluation/report.py:157-182` — same fix for report generation
+- **Problem**: With new signal-encoded filenames (`weights_ILLIQ_AMIHUD_...parquet`) coexisting with old generic names (`weights_quantile_...parquet`), sorted glob would pick the wrong file
+- **Fix**: Read `weights_filename` from `portfolio/metadata.json` first, fall back to sorted glob only if metadata unavailable
+- Prevents silent mismatches where backtest uses one signal but report analyzes another
+
+**Fundamentals Pipeline Market Cap**
+- `quant_platform/core/data/fundamentals.py:413-427` — ensure `market_cap` column exists before accessing it
+- **Problem**: `_fetch_financials_yf()` doesn't create `market_cap` column → `KeyError` when trying to enrich from prices
+- **Fix**: Initialize `market_cap = np.nan` if missing, then compute from `shares_outstanding × close` where available
+- Allows yfinance fallback to complete successfully (3479 rows from 503 tickers in 4.5 minutes)
+
+**Test Results:** All 149 tests pass, zero regressions
+
 ## [0.8.1] — 2026-03-25
 
 ### Fixed — Critical Bug Fixes (18 test failures → 0 failures)

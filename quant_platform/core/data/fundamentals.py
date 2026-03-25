@@ -409,6 +409,11 @@ def build_fundamentals(
         px = load_parquet(prices_path, columns=["date", "ticker", "close"])
         px["date"] = pd.to_datetime(px["date"])
         fund["date"] = pd.to_datetime(fund["date"])
+        
+        # Ensure market_cap column exists (may be missing from yfinance data)
+        if "market_cap" not in fund.columns:
+            fund["market_cap"] = np.nan
+        
         if "shares_outstanding" in fund.columns:
             fund = fund.merge(px, on=["date", "ticker"], how="left", suffixes=("", "_px"))
             mask = fund["market_cap"].isna() & fund["shares_outstanding"].notna()
@@ -417,6 +422,9 @@ def build_fundamentals(
             )
             if "close_px" in fund.columns:
                 fund.drop(columns=["close_px"], inplace=True, errors="ignore")
+            # Drop the merged 'close' column to avoid conflicts
+            if "close" in fund.columns:
+                fund.drop(columns=["close"], inplace=True, errors="ignore")
 
     # --- Compute book_value_per_share if possible ---
     if "total_equity" in fund.columns and "shares_outstanding" in fund.columns:

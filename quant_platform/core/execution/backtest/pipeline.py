@@ -53,11 +53,29 @@ def run_trading_pipeline(
         portfolio_dir = resolve_data_path("portfolio")
         if not portfolio_dir.exists():
             raise FileNotFoundError(f"Portfolio directory not found: {portfolio_dir}")
-        parquets = sorted(portfolio_dir.glob("weights_*.parquet"))
-        if not parquets:
-            raise FileNotFoundError(f"No weight files found in {portfolio_dir}")
-        weights_path = parquets[-1]  # most recent
-        logger.info("Auto-detected weights file: {}", weights_path)
+        
+        # Try to read from metadata.json first (more reliable)
+        metadata_path = portfolio_dir / "metadata.json"
+        if metadata_path.exists():
+            import json
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+            weights_filename = metadata.get("weights_filename")
+            if weights_filename:
+                weights_path = portfolio_dir / weights_filename
+                if weights_path.exists():
+                    logger.info("Loaded weights from metadata: {}", weights_path)
+                else:
+                    logger.warning("Metadata references missing file: {}", weights_path)
+                    weights_path = None
+        
+        # Fallback to sorted glob if metadata not available
+        if weights_path is None:
+            parquets = sorted(portfolio_dir.glob("weights_*.parquet"))
+            if not parquets:
+                raise FileNotFoundError(f"No weight files found in {portfolio_dir}")
+            weights_path = parquets[-1]
+            logger.warning("Auto-detected weights via glob (fragile): {}", weights_path)
 
     weights = load_parquet(weights_path)
     weights["date"] = pd.to_datetime(weights["date"])
