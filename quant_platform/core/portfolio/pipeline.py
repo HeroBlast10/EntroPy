@@ -165,7 +165,8 @@ def run_portfolio_pipeline(
         "method": method,
         "mode": config.mode.value,
         "rebalance_freq": config.rebalance_freq,
-        "weights_path": str(output_path),
+        "weights_filename": output_path.name,  # Just the filename for reliable metadata-first lookup
+        "weights_path": str(output_path),  # Keep full path for reference
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     logger.info("Portfolio metadata saved → {}", meta_path)
