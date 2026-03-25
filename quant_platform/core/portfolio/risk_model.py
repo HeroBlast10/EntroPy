@@ -285,11 +285,11 @@ class FactorRiskModel:
         total_risk = np.sqrt(total_variance)
         
         # 5. Factor contributions (marginal contribution of each factor)
+        # contribution_k = b_k × (F @ b)_k  so that Σ contributions = b' F b
+        Fb = self.cov_matrix_ @ portfolio_exposures
         factor_contributions = {}
         for i, factor_name in enumerate(self.factor_names_):
-            # Marginal contribution = exposure_k × factor_variance_k
-            factor_var = self.cov_matrix_[i, i]
-            contribution = portfolio_exposures[i]**2 * factor_var
+            contribution = portfolio_exposures[i] * Fb[i]
             factor_contributions[factor_name] = float(contribution)
         
         return {

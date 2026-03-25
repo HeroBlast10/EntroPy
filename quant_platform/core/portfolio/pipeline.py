@@ -19,7 +19,7 @@ from loguru import logger
 from quant_platform.core.portfolio.construction import PortfolioConfig, PortfolioConstructor, PortfolioMode
 from quant_platform.core.portfolio.quantile import QuantilePortfolio
 from quant_platform.core.portfolio.optimize import OptimizedPortfolio
-from quant_platform.core.portfolio.rebalance import carry_forward_weights, rebalance_dates
+from quant_platform.core.portfolio.rebalance import carry_forward_weights, rebalance_dates, validate_portfolio_weights
 from quant_platform.core.utils.io import load_config, load_parquet, resolve_data_path, save_parquet
 
 
@@ -136,6 +136,9 @@ def run_portfolio_pipeline(
         end=str(weights["date"].max().date()),
     )
     daily_weights = carry_forward_weights(weights, all_dates)
+
+    # --- Validate weights before saving ---
+    validate_portfolio_weights(daily_weights, mode=config.mode.value)
 
     # --- Summary stats ---
     n_reb = weights["date"].nunique()

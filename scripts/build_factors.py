@@ -75,9 +75,19 @@ def main(factors, evaluate, list_factors, periods):
     prices = load_parquet(prices_path)
     prices["date"] = pd.to_datetime(prices["date"])
 
+    # --- Load fundamentals (optional — needed for value/quality factors) ---
+    fundamentals = None
+    fund_path = resolve_data_path(cfg["paths"].get("fundamentals_dir", "fundamentals"), "fundamentals.parquet")
+    if fund_path.exists():
+        fundamentals = load_parquet(fund_path)
+        fundamentals["date"] = pd.to_datetime(fundamentals["date"])
+        click.echo(f"✓ Fundamentals loaded ({len(fundamentals)} rows)")
+    else:
+        click.echo("⚠ Fundamentals not found — value/quality factors will be skipped")
+
     # --- Compute ---
     factor_names = list(factors) if factors else None
-    factor_df = reg.compute_all(prices, factor_names=factor_names)
+    factor_df = reg.compute_all(prices, fundamentals=fundamentals, factor_names=factor_names)
     out_path = reg.save_factors(factor_df)
     click.echo(f"\n✓ Factors saved → {out_path}")
 
@@ -88,6 +98,7 @@ def main(factors, evaluate, list_factors, periods):
             compare_factors,
             factor_tearsheet,
         )
+        from quant_platform.core.signals.evaluation.router import evaluate_signal
 
         prices_with_fwd = add_forward_returns(prices, periods=list(periods))
         eval_df = factor_df.merge(
@@ -96,20 +107,39 @@ def main(factors, evaluate, list_factors, periods):
             how="inner",
         )
 
-        # Evaluate each factor against 1-day forward return
+        # Route each factor to its type-specific scorecard
         factor_cols = [c for c in factor_df.columns if c not in ("date", "ticker")]
-        tearsheets = {}
+        tearsheets = {}          # CS factors — classic IC tearsheet
+        typed_results = {}       # all factors — type-specific scorecard
+
         for fc in factor_cols:
             try:
-                ts = factor_tearsheet(eval_df, fc, return_col="fwd_ret_1d")
-                tearsheets[fc] = ts
+                # Look up signal_type from registry
+                factor_cls = reg.get(fc)
+                meta = factor_cls.meta
+
+                if meta.signal_type == "cross_sectional":
+                    # Standard IC / RankIC tearsheet for cross-sectional factors
+                    ts = factor_tearsheet(eval_df, fc, return_col="fwd_ret_1d")
+                    tearsheets[fc] = ts
+                else:
+                    # Type-specific scorecard (time_series / regime / relative_value)
+                    result = evaluate_signal(
+                        signal_df=eval_df,
+                        signal_col=fc,
+                        meta=meta,
+                        prices=prices,
+                    )
+                    typed_results[fc] = result
+                    logger.info("Evaluated {} ({}) → {}", fc, meta.signal_type, result)
             except Exception as exc:
                 logger.error("Evaluation failed for {}: {}", fc, exc)
 
+        # Cross-sectional comparison table (IC-based)
         if tearsheets:
             comparison = compare_factors(tearsheets)
             click.echo("\n" + "=" * 80)
-            click.echo("FACTOR COMPARISON (1-day forward return)")
+            click.echo("FACTOR COMPARISON — Cross-Sectional (1-day forward return)")
             click.echo("=" * 80)
             click.echo(comparison.to_string())
 
@@ -118,6 +148,20 @@ def main(factors, evaluate, list_factors, periods):
             comp_path.parent.mkdir(parents=True, exist_ok=True)
             comparison.to_csv(comp_path)
             click.echo(f"\n✓ Comparison saved → {comp_path}")
+
+        # Type-specific results summary
+        if typed_results:
+            click.echo("\n" + "=" * 80)
+            click.echo("TYPE-SPECIFIC EVALUATION RESULTS")
+            click.echo("=" * 80)
+            for fc, result in typed_results.items():
+                factor_cls = reg.get(fc)
+                click.echo(f"\n  {fc} ({factor_cls.meta.signal_type}):")
+                for k, v in result.items():
+                    if isinstance(v, float):
+                        click.echo(f"    {k}: {v:.4f}")
+                    else:
+                        click.echo(f"    {k}: {v}")
 
 
 if __name__ == "__main__":

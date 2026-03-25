@@ -118,9 +118,9 @@ def test_ml_alpha_model_predict(sample_factor_data):
     """Test prediction from ML alpha model."""
     df = sample_factor_data
     
-    # Split into train and test
-    train = df[df["date"] < "2023-10-01"]
-    test = df[df["date"] >= "2023-10-01"]
+    # Split into train and test (252 calendar days: Jan 1 – Sep 9)
+    train = df[df["date"] < "2023-07-01"]
+    test = df[df["date"] >= "2023-07-01"]
     
     factors_train = train[["date", "ticker", "momentum", "value", "quality"]]
     returns_train = train.set_index(["date", "ticker"])["forward_return"]

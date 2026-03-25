@@ -231,8 +231,8 @@ def test_inverse_vol_fallback_to_equal_weight():
     # Should fall back to equal weight
     assert len(weights) > 0
     assert abs(weights.sum() - 1.0) < 1e-6
-    # Equal weight → uniform distribution
-    assert weights.std() < 1e-6
+    # Equal weight → uniform distribution (ddof=0 handles single-element case)
+    assert weights.std(ddof=0) < 1e-6
 
 
 def test_inverse_vol_with_precomputed_volatility():

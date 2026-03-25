@@ -60,7 +60,9 @@ def compute_var(
     percentile = (1 - confidence) * 100
     var = -np.percentile(returns, percentile)
     
-    return float(var)
+    # Floor at 0: if even the worst-case return is positive, there is no
+    # loss risk, so VaR = 0.
+    return float(max(0.0, var))
 
 
 def compute_cvar(

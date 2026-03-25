@@ -65,6 +65,10 @@ class PurgedKFold:
     def split(self, X: pd.DataFrame, y: pd.Series = None) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Generate train/test indices with purging and embargo.
         
+        Uses n_splits+1 equal segments: the first segment is always
+        training-only, giving exactly n_splits folds where each fold
+        trains on all data before the test block (minus embargo).
+        
         Parameters
         ----------
         X : DataFrame with DatetimeIndex
@@ -75,19 +79,21 @@ class PurgedKFold:
         train_idx, test_idx : arrays of indices
         """
         n = len(X)
-        test_size = n // self.n_splits
-        embargo_size = int(test_size * self.embargo_pct)
+        # Divide data into (n_splits + 1) segments so the first segment
+        # is always available for training.
+        test_size = n // (self.n_splits + 1)
+        embargo_size = max(1, int(n * self.embargo_pct))
         
         indices = np.arange(n)
         
         for i in range(self.n_splits):
-            # Test set
-            test_start = i * test_size
+            # Test set: segments 1 .. n_splits
+            test_start = (i + 1) * test_size
             test_end = test_start + test_size if i < self.n_splits - 1 else n
             test_idx = indices[test_start:test_end]
             
-            # Train set: all data before test set, with embargo
-            train_end = test_start - embargo_size
+            # Train set: all data before test set, minus embargo gap
+            train_end = max(0, test_start - embargo_size)
             if train_end <= 0:
                 continue  # Skip if no training data
             
@@ -190,9 +196,13 @@ class MLAlphaModel:
             if isinstance(factors.index, pd.MultiIndex):
                 factors = factors.reset_index()
         
-        # Align factors and returns
+        # Align factors and returns via merge (handles MultiIndex returns)
         factors = factors.copy()
-        factors["forward_return"] = forward_returns
+        if isinstance(forward_returns.index, pd.MultiIndex):
+            fr_df = forward_returns.rename("forward_return").reset_index()
+            factors = factors.merge(fr_df, on=["date", "ticker"], how="inner")
+        else:
+            factors["forward_return"] = forward_returns.values
         factors = factors.dropna(subset=["forward_return"])
         
         if len(factors) == 0:
@@ -323,9 +333,15 @@ class MLAlphaModel:
         -------
         Dict with CV metrics (mean_r2, std_r2, mean_ic, std_ic)
         """
-        # Prepare data
+        # Prepare data — merge via date/ticker to handle MultiIndex returns
         factors = factors.copy()
-        factors["forward_return"] = forward_returns
+        if isinstance(forward_returns.index, pd.MultiIndex):
+            fr_df = forward_returns.rename("forward_return").reset_index()
+            if "date" not in factors.columns and isinstance(factors.index, pd.MultiIndex):
+                factors = factors.reset_index()
+            factors = factors.merge(fr_df, on=["date", "ticker"], how="inner")
+        else:
+            factors["forward_return"] = forward_returns.values
         factors = factors.dropna(subset=["forward_return"])
         
         feature_cols = [

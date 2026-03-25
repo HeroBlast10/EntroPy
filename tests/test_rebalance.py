@@ -45,8 +45,9 @@ class TestCarryForward:
         })
 
         daily = carry_forward_weights(weights, all_dates)
-        # Should have weights for every trading day after first rebalance
-        assert daily["date"].nunique() >= len(all_dates) - 5  # some tolerance
+        # Should have weights for every trading day from the first rebalance onwards
+        dates_from_first_reb = all_dates[all_dates >= reb[0]]
+        assert daily["date"].nunique() >= len(dates_from_first_reb) - 2  # small tolerance
         # Between rebalances, weights should be constant
         mid_date = all_dates[len(all_dates) // 4]  # some date in first month
         if mid_date >= reb[0]:
