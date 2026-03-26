@@ -119,6 +119,7 @@ class FactorBase(abc.ABC):
         zscore: bool = True,
         neutralize_by: Optional[List[str]] = None,
         fillna_method: str = "drop",
+        **kwargs,
     ) -> pd.DataFrame:
         """Run the full factor pipeline: compute → lag → clean → transform.
 

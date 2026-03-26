@@ -137,7 +137,7 @@ class PriceFeatureCache:
     
     def _compute_kalman_features(self) -> Dict[str, pd.Series]:
         """Compute all Kalman filter features at once (they share state)."""
-        from quant_platform.core.signals.time_series.kalman_state_space import _run_kalman_filter
+        from quant_platform.core.signals.time_series.kalman_state_space import _run_kalman_on_panel
         
         # Check if already cached
         if "kalman_filtered" in self._cache:
@@ -147,33 +147,23 @@ class PriceFeatureCache:
                 "kalman_gain": self._cache["kalman_gain"],
             }
         
-        results = {"kalman_filtered": [], "kalman_velocity": [], "kalman_gain": []}
-        
-        for ticker, group in self._grouped:
-            kf_result = _run_kalman_filter(
-                group["adj_close"].values,
-                process_variance=1e-5,
-                observation_variance=0.01,
-            )
-            
-            # Align with group index
-            results["kalman_filtered"].append(
-                pd.Series(kf_result["filtered"], index=group.index, name="kalman_filtered")
-            )
-            results["kalman_velocity"].append(
-                pd.Series(kf_result["velocity"], index=group.index, name="kalman_velocity")
-            )
-            results["kalman_gain"].append(
-                pd.Series(kf_result["gain"], index=group.index, name="kalman_gain")
-            )
+        # Use panel-level function for efficiency
+        kf_result = _run_kalman_on_panel(
+            self.prices,
+            Q=1e-5,
+            R=1e-3,
+        )
         
         # Cache all three outputs
-        for key in results:
-            series = pd.concat(results[key])
-            self._cache[key] = series
-            results[key] = series
+        self._cache["kalman_filtered"] = kf_result["filtered"]
+        self._cache["kalman_velocity"] = kf_result["velocity"]
+        self._cache["kalman_gain"] = kf_result["gain"]
         
-        return results
+        return {
+            "kalman_filtered": self._cache["kalman_filtered"],
+            "kalman_velocity": self._cache["kalman_velocity"],
+            "kalman_gain": self._cache["kalman_gain"],
+        }
     
     def clear(self):
         """Clear the cache."""

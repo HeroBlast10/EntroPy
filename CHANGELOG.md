@@ -38,8 +38,22 @@ All notable changes to EntroPy are documented in this file.
 **API Changes**
 
 - `FactorRegistry.compute_all()`: added `use_cache=True`, `incremental=False`, `lookback_buffer=300`
+- `FactorBase.compute()`: added `**kwargs` to accept cache parameter
 - Backward compatible: old code works unchanged (cache enabled by default)
 - Cache statistics logged: `"Feature cache: 12 features cached, 45.3 MB"`
+
+**Critical Bug Fixes**
+
+- `quant_platform/core/signals/base.py:122` — Added `**kwargs` to `compute()` signature to accept `_feature_cache` parameter
+  - **Bug**: `compute_all()` passed `_feature_cache` via kwargs but `compute()` didn't accept it → all factor computations failed
+  - **Fix**: Accept and ignore extra kwargs (cache used internally by individual `_compute()` methods if needed)
+- `quant_platform/core/signals/feature_cache.py:140` — Fixed Kalman import from non-existent `_run_kalman_filter` to `_run_kalman_on_panel`
+  - **Bug**: Importing wrong function name → `ImportError` when accessing `kalman_*` features
+  - **Fix**: Use correct panel-level function, simplify logic to compute all outputs at once
+- `quant_platform/core/data/prices.py:312-315` — Fixed incremental dedupe to preserve newest download, not highest price
+  - **Bug**: Sorted by `["date", "ticker", "adj_close"]` before deduping → kept highest price instead of newest download
+  - **Fix**: Drop duplicates directly with `keep="last"` (df_new appended last, so "last" = newest)
+  - **Impact**: Price corrections now properly overwrite old data
 
 **Test Results:** All 150 tests pass, zero regressions
 

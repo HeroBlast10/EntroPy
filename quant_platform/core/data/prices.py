@@ -309,11 +309,10 @@ def fetch_prices(
         df_old = load_parquet(existing_path)
         df_old["date"] = pd.to_datetime(df_old["date"])
         
-        # Concatenate and dedupe (keep most recent)
+        # Concatenate and dedupe (keep newest download, not highest price)
+        # df_new comes last in concat, so keep="last" preserves new downloads
         df = pd.concat([df_old, df_new], ignore_index=True)
-        df = df.sort_values(["date", "ticker", "adj_close"]).drop_duplicates(
-            subset=["date", "ticker"], keep="last"
-        )
+        df = df.drop_duplicates(subset=["date", "ticker"], keep="last")
         logger.info("Merged: {} old rows + {} new rows → {} total (after dedupe)",
                     len(df_old), len(df_new), len(df))
     else:
