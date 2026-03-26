@@ -47,15 +47,30 @@ All notable changes to EntroPy are documented in this file.
 - `quant_platform/core/signals/base.py:122` — Added `**kwargs` to `compute()` signature to accept `_feature_cache` parameter
   - **Bug**: `compute_all()` passed `_feature_cache` via kwargs but `compute()` didn't accept it → all factor computations failed
   - **Fix**: Accept and ignore extra kwargs (cache used internally by individual `_compute()` methods if needed)
-- `quant_platform/core/signals/feature_cache.py:140` — Fixed Kalman import from non-existent `_run_kalman_filter` to `_run_kalman_on_panel`
-  - **Bug**: Importing wrong function name → `ImportError` when accessing `kalman_*` features
-  - **Fix**: Use correct panel-level function, simplify logic to compute all outputs at once
+- `quant_platform/core/signals/feature_cache.py:151-167` — Fixed Kalman tuple/dict type mismatch
+  - **Bug 1**: Imported non-existent `_run_kalman_filter` → `ImportError`
+  - **Bug 2**: Tried to access tuple as dict (`kf_result["filtered"]`) → `TypeError`
+  - **Fix**: Use correct `_run_kalman_on_panel()`, unpack tuple return, align series to original index
 - `quant_platform/core/data/prices.py:312-315` — Fixed incremental dedupe to preserve newest download, not highest price
   - **Bug**: Sorted by `["date", "ticker", "adj_close"]` before deduping → kept highest price instead of newest download
   - **Fix**: Drop duplicates directly with `keep="last"` (df_new appended last, so "last" = newest)
   - **Impact**: Price corrections now properly overwrite old data
+- `quant_platform/core/signals/registry.py:136` — **Disabled `use_cache=True` by default**
+  - **Reason**: Cache infrastructure is built but factors don't actually use it yet (no `_compute()` reads from cache)
+  - Cache logs show "0 features cached" → optimization not yet active
+  - Will re-enable after factors are updated to consume cached features
 
-**Test Results:** All 150 tests pass, zero regressions
+**Test Coverage Added**
+
+- `tests/test_registry_integration.py` — 9 integration tests for `FactorRegistry.compute_all()` and `PriceFeatureCache`
+  - Tests cache-enabled and cache-disabled paths
+  - Tests Kalman feature computation (previously untested, caught tuple/dict bug)
+  - Tests cache statistics and clearing
+- `tests/test_prices_integration.py` — 4 integration tests for incremental price downloads
+  - Tests dedupe logic preserves newest download over old (caught adj_close sort bug)
+  - Tests parameter validation for `incremental`, `overlap_days`, `parallel`, `max_workers`
+
+**Test Results:** All 163 tests pass (13 new integration tests)
 
 ## [0.8.3] — 2026-03-26
 

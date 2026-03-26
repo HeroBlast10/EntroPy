@@ -133,7 +133,7 @@ class FactorRegistry:
         fundamentals: Optional[pd.DataFrame] = None,
         factor_names: Optional[List[str]] = None,
         factor_params: Optional[Dict[str, Dict]] = None,
-        use_cache: bool = True,
+        use_cache: bool = False,
         incremental: bool = False,
         lookback_buffer: int = 300,
         **kwargs,

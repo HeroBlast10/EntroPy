@@ -148,16 +148,23 @@ class PriceFeatureCache:
             }
         
         # Use panel-level function for efficiency
-        kf_result = _run_kalman_on_panel(
+        # Returns: (df, filtered, velocity, kg, raw_prices)
+        df_sorted, filtered, velocity, kg, raw_prices = _run_kalman_on_panel(
             self.prices,
             Q=1e-5,
             R=1e-3,
         )
         
+        # Align results back to original prices index
+        # df_sorted is sorted by [ticker, date], need to map back
+        aligned_filtered = pd.Series(filtered, index=df_sorted.index).reindex(self.prices.index)
+        aligned_velocity = pd.Series(velocity, index=df_sorted.index).reindex(self.prices.index)
+        aligned_gain = pd.Series(kg, index=df_sorted.index).reindex(self.prices.index)
+        
         # Cache all three outputs
-        self._cache["kalman_filtered"] = kf_result["filtered"]
-        self._cache["kalman_velocity"] = kf_result["velocity"]
-        self._cache["kalman_gain"] = kf_result["gain"]
+        self._cache["kalman_filtered"] = aligned_filtered
+        self._cache["kalman_velocity"] = aligned_velocity
+        self._cache["kalman_gain"] = aligned_gain
         
         return {
             "kalman_filtered": self._cache["kalman_filtered"],
