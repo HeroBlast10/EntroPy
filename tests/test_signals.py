@@ -101,6 +101,17 @@ class TestHigherMoments:
         assert isinstance(result, pd.Series)
 
 
+class TestVolatilityFactors:
+    def test_idiovol_returns_series_with_signal(self):
+        from quant_platform.core.signals.cross_sectional.volatility import IdioVol
+        panel = _make_panel(n_dates=120, n_tickers=5)
+        factor = IdioVol()
+        result = factor._compute(panel)
+        assert isinstance(result, pd.Series)
+        assert len(result) == len(panel)
+        assert result.notna().sum() > 0
+
+
 class TestHMMRegime:
     def test_regime_returns_series(self):
         from quant_platform.core.signals.regime.hmm_regime import HMMTurbulenceProbability

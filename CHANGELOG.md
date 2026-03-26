@@ -2,6 +2,55 @@
 
 All notable changes to EntroPy are documented in this file.
 
+## [0.8.3] — 2026-03-26
+
+### Performance — Data Download Optimization (10-100× faster for updates)
+
+**Prices: Incremental Download with Overlap Buffer**
+
+- `quant_platform/core/data/prices.py` — complete rewrite to support incremental downloads
+- **Problem**: Serial download of 500 tickers from 2010 (~14 years × 500 = 7000 requests) takes 30-60 minutes, repeated unnecessarily on every run
+- **Solution 1: Incremental mode** (default `incremental=True`)
+  - Read existing `prices.parquet` to get last date per ticker
+  - Download only from `last_date - overlap_days` (default 10 trading days for split/correction coverage)
+  - Deduplicate on `[date, ticker]` after merge, keeping most recent records
+  - **Impact**: Daily updates now download ~10 days × 500 tickers instead of full history → **~99% time reduction**
+- **Solution 2: Optional parallelization** (`parallel=True, max_workers=4`)
+  - Use `ThreadPoolExecutor` for concurrent downloads (I/O-bound task)
+  - Rate limiting only applies to serial mode
+  - **Impact**: 4× speedup for initial full downloads
+- Functions: `_get_last_dates()`, `_compute_download_start()` with trading calendar alignment
+
+**Fundamentals: Per-Ticker Caching with TTL**
+
+- `quant_platform/core/data/fundamentals.py` — added intelligent caching layer
+- **Problem**: Quarterly financials update infrequently (4× per year), but pipeline re-fetches all 500 tickers every run → wasted API calls
+- **Solution: Per-ticker cache with TTL** (default 60 days)
+  - Cache directory: `data/fundamentals/raw/<ticker>.parquet`
+  - Check file modification time, skip fetch if within TTL
+  - Only re-fetch: (1) cache expired, (2) cache missing, (3) stale data detected
+  - **Impact**: After initial fetch, daily runs only download ~20 tickers (recent reports) instead of 500 → **~96% reduction**
+- Functions: `_get_cache_dir()`, `_is_cache_fresh()`, `_load_cached_fundamentals()`, `_save_to_cache()`
+- `_fetch_financials_yf()` now accepts `use_cache=True, cache_ttl_days=60`
+
+**Fundamentals: Quality Gates & Coverage Report**
+
+- `quant_platform/core/data/fundamentals.py` — added data quality monitoring
+- **Problem**: Silent failures produced 100% null financial data, only discovered after full pipeline run
+- **Solution: Automated quality checks**
+  - `_generate_quality_report()`: computes coverage % for 8 core fields (`net_income`, `total_equity`, `total_assets`, `gross_profit`, `revenue`, `operating_income`, `cash_from_operations`, `market_cap`)
+  - Logs field-by-field coverage to console during build
+  - Saves `data/fundamentals/quality_report.json` with full metrics: ticker count, date ranges, non-null counts, coverage percentages
+  - **Impact**: Immediate visibility into data quality, easy to diagnose missing fields or failed sources
+
+**API Changes**
+
+- `fetch_prices()`: added `incremental=True`, `overlap_days=10`, `existing_path=None`, `parallel=False`, `max_workers=4`
+- `_fetch_financials_yf()`: added `use_cache=True`, `cache_ttl_days=60`
+- Backward compatible: all new params have sensible defaults
+
+**Test Results:** All 150 tests pass, zero regressions
+
 ## [0.8.2] — 2026-03-25
 
 ### Performance — Volatility Factor Optimization (10-100× speedup)

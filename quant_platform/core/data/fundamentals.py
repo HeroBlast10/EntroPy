@@ -17,9 +17,11 @@ the ``date`` column of the output table.
 
 from __future__ import annotations
 
+import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -30,6 +32,131 @@ from tqdm import tqdm
 from quant_platform.core.data.calendar import align_to_calendar, next_trading_day, trading_dates
 from quant_platform.core.data.schema import FUNDAMENTALS_SCHEMA, validate_dataframe
 from quant_platform.core.utils.io import load_config, resolve_data_path, save_parquet
+
+# ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _get_cache_dir() -> Path:
+    """Get fundamentals raw cache directory."""
+    cfg = load_config()
+    cache_dir = resolve_data_path("fundamentals", "raw")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _is_cache_fresh(ticker: str, ttl_days: int = 60) -> bool:
+    """Check if cached fundamentals for ticker is fresh (within TTL).
+    
+    Parameters
+    ----------
+    ticker : ticker symbol
+    ttl_days : cache TTL in days (default 60)
+    
+    Returns
+    -------
+    True if cache exists and is within TTL, False otherwise
+    """
+    cache_dir = _get_cache_dir()
+    cache_file = cache_dir / f"{ticker}.parquet"
+    
+    if not cache_file.exists():
+        return False
+    
+    # Check file modification time
+    mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+    age = datetime.now() - mtime
+    
+    if age > timedelta(days=ttl_days):
+        logger.debug("{}: cache expired (age={} days)", ticker, age.days)
+        return False
+    
+    logger.debug("{}: cache fresh (age={} days)", ticker, age.days)
+    return True
+
+
+def _load_cached_fundamentals(ticker: str) -> Optional[pd.DataFrame]:
+    """Load cached fundamentals for a single ticker."""
+    cache_dir = _get_cache_dir()
+    cache_file = cache_dir / f"{ticker}.parquet"
+    
+    if not cache_file.exists():
+        return None
+    
+    try:
+        from quant_platform.core.utils.io import load_parquet
+        df = load_parquet(cache_file)
+        return df
+    except Exception as exc:
+        logger.warning("{}: failed to load cache – {}", ticker, exc)
+        return None
+
+
+def _save_to_cache(ticker: str, df: pd.DataFrame) -> None:
+    """Save fundamentals for a single ticker to cache."""
+    if df.empty:
+        return
+    
+    cache_dir = _get_cache_dir()
+    cache_file = cache_dir / f"{ticker}.parquet"
+    
+    try:
+        save_parquet(df, cache_file)
+        logger.debug("{}: saved to cache ({} rows)", ticker, len(df))
+    except Exception as exc:
+        logger.warning("{}: failed to save cache – {}", ticker, exc)
+
+
+def _generate_quality_report(df: pd.DataFrame) -> Dict:
+    """Generate quality report for fundamentals data.
+    
+    Returns
+    -------
+    Dict with coverage metrics: tickers, date_range, field_coverage
+    """
+    if df.empty:
+        return {
+            "tickers": 0,
+            "total_rows": 0,
+            "date_range": None,
+            "report_date_range": None,
+            "field_coverage": {},
+        }
+    
+    # Core financial fields to check
+    core_fields = [
+        "net_income", "total_equity", "total_assets", "gross_profit",
+        "revenue", "operating_income", "cash_from_operations", "market_cap"
+    ]
+    
+    field_coverage = {}
+    for field in core_fields:
+        if field in df.columns:
+            non_null = df[field].notna().sum()
+            total = len(df)
+            pct = (non_null / total * 100) if total > 0 else 0
+            field_coverage[field] = {
+                "non_null": int(non_null),
+                "total": int(total),
+                "coverage_pct": round(pct, 2)
+            }
+    
+    report = {
+        "tickers": int(df["ticker"].nunique()) if "ticker" in df.columns else 0,
+        "total_rows": len(df),
+        "date_range": (
+            str(df["date"].min().date()) + " to " + str(df["date"].max().date())
+            if "date" in df.columns else None
+        ),
+        "report_date_range": (
+            str(df["report_date"].min()) + " to " + str(df["report_date"].max())
+            if "report_date" in df.columns and df["report_date"].notna().any() else None
+        ),
+        "field_coverage": field_coverage,
+    }
+    
+    return report
+
 
 # ---------------------------------------------------------------------------
 # SimFin helpers
@@ -134,6 +261,8 @@ def _fetch_market_cap_yf(
 def _fetch_financials_yf(
     tickers: List[str],
     lag_days: int,
+    use_cache: bool = True,
+    cache_ttl_days: int = 60,
 ) -> pd.DataFrame:
     """Fetch quarterly financial statements from yfinance as a fallback.
 
@@ -141,10 +270,40 @@ def _fetch_financials_yf(
     then maps them to the project schema.  ``publish_date`` is approximated
     as ``report_date + 45 days`` (SEC 10-Q deadline for large accelerated
     filers), and point-in-time lag is applied on top.
+    
+    Parameters
+    ----------
+    tickers : list of ticker symbols
+    lag_days : publication lag in days
+    use_cache : if True, use cached data within TTL
+    cache_ttl_days : cache TTL in days (default 60)
     """
     all_records: List[Dict] = []
-
-    for tkr in tqdm(tickers, desc="Fetching financials (yfinance)"):
+    cached_tickers = []
+    fetch_tickers = []
+    
+    # --- Check cache for each ticker ---
+    if use_cache:
+        for tkr in tickers:
+            if _is_cache_fresh(tkr, ttl_days=cache_ttl_days):
+                cached = _load_cached_fundamentals(tkr)
+                if cached is not None and not cached.empty:
+                    all_records.extend(cached.to_dict('records'))
+                    cached_tickers.append(tkr)
+                else:
+                    fetch_tickers.append(tkr)
+            else:
+                fetch_tickers.append(tkr)
+        
+        if cached_tickers:
+            logger.info("Using cached fundamentals for {} tickers (TTL={} days)",
+                        len(cached_tickers), cache_ttl_days)
+        tickers_to_fetch = fetch_tickers
+    else:
+        tickers_to_fetch = tickers
+    
+    # --- Fetch fresh data for non-cached tickers ---
+    for tkr in tqdm(tickers_to_fetch, desc="Fetching financials (yfinance)"):
         try:
             t = yf.Ticker(tkr)
 
@@ -241,10 +400,17 @@ def _fetch_financials_yf(
 
     # Apply point-in-time lag
     fund = _apply_pit_lag(fund, "publish_date", lag_days)
+    
+    # --- Save fresh data to cache ---
+    if use_cache and tickers_to_fetch:
+        for tkr in tickers_to_fetch:
+            ticker_data = fund[fund["ticker"] == tkr]
+            if not ticker_data.empty:
+                _save_to_cache(tkr, ticker_data)
 
     logger.info(
-        "yfinance financials: {} rows from {} tickers",
-        len(fund), fund["ticker"].nunique(),
+        "yfinance financials: {} rows from {} tickers ({} cached, {} fetched)",
+        len(fund), fund["ticker"].nunique(), len(cached_tickers), len(tickers_to_fetch),
     )
     return fund
 
@@ -454,8 +620,25 @@ def build_fundamentals(
 
     validate_dataframe(fund, "fundamentals")
 
+    # --- Generate and log quality report ---
+    quality_report = _generate_quality_report(fund)
+    
     logger.info("Fundamentals: {} rows, {} tickers", len(fund), fund["ticker"].nunique())
-
+    logger.info("Quality Report:")
+    logger.info("  Date range: {}", quality_report.get("date_range"))
+    logger.info("  Report date range: {}", quality_report.get("report_date_range"))
+    logger.info("  Field coverage:")
+    for field, metrics in quality_report.get("field_coverage", {}).items():
+        logger.info("    {}: {}/{} ({:.1f}%)",
+                    field, metrics["non_null"], metrics["total"], metrics["coverage_pct"])
+    
+    # Save quality report to JSON
     if output_path is None:
         output_path = resolve_data_path(cfg["paths"]["fundamentals_dir"], "fundamentals.parquet")
+    
+    report_path = Path(output_path).parent / "quality_report.json"
+    with open(report_path, "w") as f:
+        json.dump(quality_report, f, indent=2)
+    logger.info("Quality report saved → {}", report_path)
+    
     return save_parquet(fund, output_path, schema=FUNDAMENTALS_SCHEMA)

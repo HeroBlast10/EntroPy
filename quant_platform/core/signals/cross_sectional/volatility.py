@@ -68,7 +68,11 @@ def _ols_residual_std(y: np.ndarray, x: np.ndarray) -> float:
     beta = (xm_dm * (ym - ym.mean())).sum() / denom
     alpha = ym.mean() - beta * xm.mean()
     resid = ym - (alpha + beta * xm)
-    return float(np.std(resid, ddof=1))
+    n = len(resid)
+    if n <= 1:
+        return np.nan
+    resid_dm = resid - resid.mean()
+    return float(np.sqrt((resid_dm ** 2).sum() / (n - 1)))
 
 
 @jit(nopython=True, cache=True)
@@ -231,8 +235,11 @@ class IdioVol(FactorBase):
 
         if "ticker" not in df.columns:
             return pd.Series(dtype="float64")
-        
-        return df.groupby("ticker", group_keys=False).apply(_compute_idiovol)
+
+        return df.groupby("ticker", group_keys=False).apply(
+            _compute_idiovol,
+            include_groups=False,
+        )
 
 
 class Skew60D(FactorBase):
