@@ -57,13 +57,16 @@ class Turnover20D(FactorBase):
         direction=-1,
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = df["volume"].astype(float)
+        vol = prices["volume"].astype(float)
         # Relative turnover: volume / trailing 60-day median volume
-        median_vol = vol.groupby(df["ticker"]).transform(
-            lambda s: s.rolling(60, min_periods=20).median()
-        )
+        if _feature_cache is not None:
+            median_vol = _feature_cache.get("volume_median_60")
+        else:
+            median_vol = vol.groupby(df["ticker"]).transform(
+                lambda s: s.rolling(60, min_periods=20).median()
+            )
         rel_turn = _safe_div(vol, median_vol)
         # 20-day average
         return rel_turn.groupby(df["ticker"]).transform(
@@ -81,12 +84,15 @@ class Turnover60D(FactorBase):
         direction=-1,
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = df["volume"].astype(float)
-        median_vol = vol.groupby(df["ticker"]).transform(
-            lambda s: s.rolling(120, min_periods=40).median()
-        )
+        vol = prices["volume"].astype(float)
+        if _feature_cache is not None:
+            median_vol = _feature_cache.get("volume_median_120")
+        else:
+            median_vol = vol.groupby(df["ticker"]).transform(
+                lambda s: s.rolling(120, min_periods=40).median()
+            )
         rel_turn = _safe_div(vol, median_vol)
         return rel_turn.groupby(df["ticker"]).transform(
             lambda s: s.rolling(60, min_periods=40).mean()
@@ -110,10 +116,14 @@ class IlliqAmihud(FactorBase):
         references=["Amihud (2002)"],
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(lambda s: s.pct_change())
-        dollar_vol = df["close"].abs() * df["volume"].astype(float)
+        if _feature_cache is not None:
+            ret = _feature_cache.get("ret_1d")
+            dollar_vol = _feature_cache.get("dollar_vol")
+        else:
+            ret = df.groupby("ticker")["adj_close"].transform(lambda s: s.pct_change())
+            dollar_vol = df["close"].abs() * df["volume"].astype(float)
         # |ret| / dollar_volume, scaled by 1e6 to keep numbers reasonable
         illiq_daily = _safe_div(ret.abs(), dollar_vol) * 1e6
         return illiq_daily.groupby(df["ticker"]).transform(
@@ -137,9 +147,9 @@ class VolumeCV(FactorBase):
         direction=-1,
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = df["volume"].astype(float)
+        vol = prices["volume"].astype(float)
 
         def _cv(s: pd.Series) -> pd.Series:
             mu = s.rolling(60, min_periods=40).mean()
@@ -169,9 +179,13 @@ class PriceImpact(FactorBase):
         references=["Kyle (1985)"],
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"]).copy()
-        ret = df.groupby("ticker")["adj_close"].transform(lambda s: s.pct_change())
+        ret = (
+            _feature_cache.get("ret_1d")
+            if _feature_cache is not None
+            else df.groupby("ticker")["adj_close"].transform(lambda s: s.pct_change())
+        )
         # Signed volume: volume × sign(return)
         sign_vol = df["volume"].astype(float) * np.sign(ret)
 
@@ -206,15 +220,19 @@ class TurnoverAccel(FactorBase):
         direction=-1,
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = df["volume"].astype(float)
-        ma20 = vol.groupby(df["ticker"]).transform(
-            lambda s: s.rolling(20, min_periods=15).mean()
-        )
-        ma60 = vol.groupby(df["ticker"]).transform(
-            lambda s: s.rolling(60, min_periods=40).mean()
-        )
+        vol = prices["volume"].astype(float)
+        if _feature_cache is not None:
+            ma20 = _feature_cache.get("volume_mean_20")
+            ma60 = _feature_cache.get("volume_mean_60")
+        else:
+            ma20 = vol.groupby(df["ticker"]).transform(
+                lambda s: s.rolling(20, min_periods=15).mean()
+            )
+            ma60 = vol.groupby(df["ticker"]).transform(
+                lambda s: s.rolling(60, min_periods=40).mean()
+            )
         return _safe_div(ma20, ma60) - 1.0
 
 
@@ -231,15 +249,19 @@ class AbnormalVolume(FactorBase):
         direction=-1,
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = df["volume"].astype(float)
-        mu = vol.groupby(df["ticker"]).transform(
-            lambda s: s.rolling(60, min_periods=40).mean()
-        )
-        sigma = vol.groupby(df["ticker"]).transform(
-            lambda s: s.rolling(60, min_periods=40).std()
-        )
+        vol = prices["volume"].astype(float)
+        if _feature_cache is not None:
+            mu = _feature_cache.get("volume_mean_60")
+            sigma = _feature_cache.get("volume_std_60")
+        else:
+            mu = vol.groupby(df["ticker"]).transform(
+                lambda s: s.rolling(60, min_periods=40).mean()
+            )
+            sigma = vol.groupby(df["ticker"]).transform(
+                lambda s: s.rolling(60, min_periods=40).std()
+            )
         return _safe_div(vol - mu, sigma)
 
 

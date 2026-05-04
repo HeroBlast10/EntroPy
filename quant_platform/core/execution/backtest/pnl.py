@@ -84,17 +84,13 @@ def compute_daily_returns(
 
     daily_trade_cost = daily_trade_cost.reindex(date_idx, fill_value=0.0)
 
-    # --- Borrow cost (short positions) ---
-    short_notional_per_day = pd.Series(0.0, index=date_idx)
+    # --- Borrow exposure (short positions) ---
+    short_abs_weight_per_day = pd.Series(0.0, index=date_idx)
     if (dw["weight"] < 0).any():
         short_w = dw[dw["weight"] < 0].copy()
         short_w["abs_weight"] = short_w["weight"].abs()
         short_agg = short_w.groupby("date")["abs_weight"].sum()
-        short_notional_per_day = short_agg.reindex(date_idx, fill_value=0.0) * initial_capital
-
-    daily_borrow = short_notional_per_day.apply(
-        lambda n: daily_borrow_cost(n, cost_model)
-    )
+        short_abs_weight_per_day = short_agg.reindex(date_idx, fill_value=0.0)
 
     # --- Assemble ---
     result = pd.DataFrame(index=date_idx)
@@ -103,15 +99,22 @@ def compute_daily_returns(
     # Express costs as fraction of NAV (not dollar)
     # For the first day, use initial_capital; thereafter use running NAV
     result["trading_cost_dollar"] = daily_trade_cost.values
-    result["borrow_cost_dollar"] = daily_borrow.values
-    result["total_cost_dollar"] = result["trading_cost_dollar"] + result["borrow_cost_dollar"]
 
     # Build NAV series
     nav_gross = [initial_capital]
     nav_net = [initial_capital]
+    borrow_costs = []
+    total_costs = []
+    prev_navs = []
     for i, dt in enumerate(result.index):
         g = result["gross_ret"].iloc[i]
-        tc = result["total_cost_dollar"].iloc[i]
+        prev_nav = nav_net[-1]
+        borrow_notional = short_abs_weight_per_day.loc[dt] * prev_nav
+        borrow_cost = daily_borrow_cost(borrow_notional, cost_model)
+        tc = result["trading_cost_dollar"].iloc[i] + borrow_cost
+        prev_navs.append(prev_nav)
+        borrow_costs.append(borrow_cost)
+        total_costs.append(tc)
         # Gross NAV
         new_nav_g = nav_gross[-1] * (1 + g)
         nav_gross.append(new_nav_g)
@@ -121,6 +124,9 @@ def compute_daily_returns(
 
     result["nav_gross"] = nav_gross[1:]
     result["nav_net"] = nav_net[1:]
+    result["borrow_cost_dollar"] = borrow_costs
+    result["total_cost_dollar"] = total_costs
+    result["prev_nav_net"] = prev_navs
 
     # Net return (including cost drag)
     result["net_ret"] = result["nav_net"].pct_change()
@@ -130,10 +136,10 @@ def compute_daily_returns(
 
     # Cost as fraction of NAV
     result["trading_cost_bps"] = (
-        result["trading_cost_dollar"] / result["nav_net"].shift(1).fillna(initial_capital) * 10_000
+        result["trading_cost_dollar"] / result["prev_nav_net"].replace(0, np.nan) * 10_000
     )
     result["borrow_cost_bps"] = (
-        result["borrow_cost_dollar"] / result["nav_net"].shift(1).fillna(initial_capital) * 10_000
+        result["borrow_cost_dollar"] / result["prev_nav_net"].replace(0, np.nan) * 10_000
     )
 
     # Drawdown
@@ -143,7 +149,7 @@ def compute_daily_returns(
     result["drawdown_net"] = result["nav_net"] / result["peak_net"] - 1.0
 
     # Clean up helper columns
-    result.drop(columns=["peak_gross", "peak_net"], inplace=True)
+    result.drop(columns=["peak_gross", "peak_net", "prev_nav_net"], inplace=True)
 
     logger.info(
         "PnL computed: {} days, gross={:.2%} cum, net={:.2%} cum, max_dd={:.2%}",

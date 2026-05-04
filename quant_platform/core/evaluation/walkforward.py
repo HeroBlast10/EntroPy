@@ -33,6 +33,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from quant_platform.core.signals.effective import build_effective_signal
+
 
 @dataclass
 class WalkForwardConfig:
@@ -101,7 +103,6 @@ def _evaluate_fold(
     2. On test period: build simple quantile portfolio, compute OOS return.
     """
     from quant_platform.core.signals.cross_sectional.evaluation import compute_rank_ic_series, ic_summary
-    from quant_platform.core.execution.backtest.pnl import performance_summary
 
     # --- Prepare data ---
     prices = prices.copy()
@@ -109,9 +110,10 @@ def _evaluate_fold(
 
     # Forward returns for IC calc
     prices_sorted = prices.sort_values(["ticker", "date"])
-    prices_sorted["fwd_ret_1d"] = (
-        prices_sorted.groupby("ticker")["adj_close"].pct_change().shift(-1)
+    prices_sorted["fwd_ret_1d"] = prices_sorted.groupby("ticker")["adj_close"].transform(
+        lambda s: s.pct_change().shift(-1)
     )
+    directions = _infer_factor_directions([c for c in factor_df.columns if c not in ("date", "ticker")])
 
     # --- Training period ---
     train_factor = factor_df[factor_df["date"].isin(train_dates)]
@@ -120,9 +122,28 @@ def _evaluate_fold(
         on=["date", "ticker"], how="inner",
     )
 
+    selected_factors = [signal_col]
+    train_scores: Dict[str, float] = {}
+    if config.factor_select_top_k is not None:
+        candidates = [c for c in factor_df.columns if c not in ("date", "ticker")]
+        selected_factors, train_scores = _select_top_factors(
+            train_merged,
+            candidates,
+            directions,
+            top_k=config.factor_select_top_k,
+        )
+
+    train_signal_col = signal_col if len(selected_factors) == 1 else "_wf_signal"
+    train_eval = _build_effective_fold_signal(
+        train_merged,
+        selected_factors,
+        directions,
+        output_col=train_signal_col,
+    )
+
     # IC during training
-    if signal_col in train_merged.columns and len(train_merged) > 0:
-        train_ic = compute_rank_ic_series(train_merged, signal_col, "fwd_ret_1d")
+    if train_signal_col in train_eval.columns and len(train_eval) > 0:
+        train_ic = compute_rank_ic_series(train_eval, train_signal_col, "fwd_ret_1d")
         train_ic_stats = ic_summary(train_ic)
     else:
         train_ic_stats = {"mean_ic": np.nan, "icir": np.nan}
@@ -143,17 +164,24 @@ def _evaluate_fold(
             "oos_return": np.nan,
             "oos_sharpe": np.nan,
             "oos_max_dd": np.nan,
+            "selected_factors": ",".join(selected_factors),
         }
 
     # Build daily equal-weight top-quintile portfolio
+    test_factor = _build_effective_fold_signal(
+        test_factor,
+        selected_factors,
+        directions,
+        output_col=train_signal_col,
+    )
     oos_returns = []
     for dt in sorted(test_dates):
-        sig = test_factor.loc[test_factor["date"] == dt, ["ticker", signal_col]].dropna()
+        sig = test_factor.loc[test_factor["date"] == dt, ["ticker", train_signal_col]].dropna()
         if len(sig) < 10:
             continue
         # Top quintile
-        threshold = sig[signal_col].quantile(0.8)
-        longs = sig[sig[signal_col] >= threshold]["ticker"]
+        threshold = sig[train_signal_col].quantile(0.8)
+        longs = sig[sig[train_signal_col] >= threshold]["ticker"]
         # Equal weight return
         day_ret = test_prices.loc[
             (test_prices["date"] == dt) & (test_prices["ticker"].isin(longs)),
@@ -170,6 +198,7 @@ def _evaluate_fold(
             "train_ic": train_ic_stats.get("mean_ic", np.nan),
             "train_icir": train_ic_stats.get("icir", np.nan),
             "oos_return": np.nan, "oos_sharpe": np.nan, "oos_max_dd": np.nan,
+            "selected_factors": ",".join(selected_factors),
         }
 
     oos_df = pd.DataFrame(oos_returns).set_index("date")["ret"]
@@ -190,7 +219,90 @@ def _evaluate_fold(
         "oos_return": round(ann_ret, 6),
         "oos_sharpe": round(sharpe, 4) if np.isfinite(sharpe) else np.nan,
         "oos_max_dd": round(max_dd, 6),
+        "selected_factors": ",".join(selected_factors),
+        "train_selected_mean_ic": float(np.nanmean(list(train_scores.values()))) if train_scores else train_ic_stats.get("mean_ic", np.nan),
     }
+
+
+def _select_top_factors(
+    train_merged: pd.DataFrame,
+    candidates: List[str],
+    directions: Dict[str, int],
+    top_k: int,
+) -> Tuple[List[str], Dict[str, float]]:
+    """Select factors by training-window effective RankIC."""
+    from quant_platform.core.signals.cross_sectional.evaluation import compute_rank_ic_series
+
+    scores: Dict[str, float] = {}
+    for col in candidates:
+        if col not in train_merged.columns:
+            continue
+        eff = build_effective_signal(
+            train_merged[["date", "ticker", col, "fwd_ret_1d"]].copy(),
+            col,
+            direction=directions.get(col, 1),
+        )
+        if eff.empty:
+            continue
+        ric = compute_rank_ic_series(eff, col, "fwd_ret_1d")
+        score = ric.mean()
+        if pd.notna(score):
+            scores[col] = float(score)
+
+    if not scores:
+        return candidates[:1], {}
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    selected = [name for name, _ in ranked[: max(1, top_k)]]
+    return selected, {name: scores[name] for name in selected}
+
+
+def _build_effective_fold_signal(
+    df: pd.DataFrame,
+    factor_cols: List[str],
+    directions: Dict[str, int],
+    output_col: str,
+) -> pd.DataFrame:
+    """Build one effective factor or an equal-weight selected-factor composite."""
+    if not factor_cols:
+        result = df.copy()
+        result[output_col] = np.nan
+        return result
+
+    result = df.copy()
+    base_index = result.set_index(["date", "ticker"]).index
+    effective_cols = []
+    for col in factor_cols:
+        if col not in result.columns:
+            continue
+        eff_col = f"_eff_{col}"
+        eff = build_effective_signal(
+            result[["date", "ticker", col]].copy(),
+            col,
+            output_col=eff_col,
+            direction=directions.get(col, 1),
+        )
+        result[eff_col] = eff.set_index(["date", "ticker"])[eff_col].reindex(base_index).values
+        effective_cols.append(eff_col)
+
+    if len(effective_cols) == 1:
+        result[output_col] = result[effective_cols[0]]
+    elif effective_cols:
+        result[output_col] = result[effective_cols].mean(axis=1)
+    else:
+        result[output_col] = np.nan
+    return result
+
+
+def _infer_factor_directions(factor_cols: List[str]) -> Dict[str, int]:
+    try:
+        from quant_platform.core.signals.registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.discover()
+        return {name: reg.get(name).meta.direction for name in factor_cols if name in reg}
+    except Exception:
+        return {}
 
 
 # ===================================================================
@@ -245,6 +357,9 @@ def run_walk_forward(
         results.append(fold_result)
 
     result_df = pd.DataFrame(results)
+    if result_df.empty:
+        logger.warning("Walk-forward produced no valid folds")
+        return result_df
 
     # Summary
     mean_oos = result_df["oos_sharpe"].mean()

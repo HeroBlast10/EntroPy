@@ -11,7 +11,7 @@ Orchestrates the full backtest simulation:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 import pandas as pd
 from loguru import logger
@@ -19,6 +19,7 @@ from loguru import logger
 from quant_platform.core.execution.cost_models.us_equity import CostModel, summarise_costs
 from quant_platform.core.execution.backtest.vectorized_daily import simulate_execution
 from quant_platform.core.execution.backtest.pnl import compute_daily_returns, cost_attribution, performance_summary
+from quant_platform.core.evaluation.capacity import capacity_analysis
 from quant_platform.core.utils.io import load_config, load_parquet, resolve_data_path, save_parquet
 
 
@@ -27,6 +28,10 @@ def run_trading_pipeline(
     cost_model: Optional[CostModel] = None,
     initial_capital: float = 1_000_000.0,
     output_dir: Optional[Path | str] = None,
+    benchmark_market: Optional[str] = "us",
+    benchmark_path: Optional[Path | str] = None,
+    risk_free_rate: float = 0.0,
+    capacity_capitals: Optional[Iterable[float]] = None,
 ) -> Dict[str, object]:
     """End-to-end trading simulation pipeline.
 
@@ -111,7 +116,29 @@ def run_trading_pipeline(
         attr = cost_attribution(trades)
 
     # --- Performance summary ---
-    perf = performance_summary(daily_pnl)
+    benchmark_returns = _load_benchmark_returns(
+        market=benchmark_market,
+        path=benchmark_path,
+        dates=daily_pnl.index,
+    )
+    perf = performance_summary(
+        daily_pnl,
+        benchmark_returns=benchmark_returns,
+        risk_free_rate=risk_free_rate,
+    )
+
+    # --- Capacity analysis ---
+    capacity = capacity_analysis(
+        trades,
+        daily_pnl,
+        cost_model=cost_model,
+        capital_grid=capacity_capitals or (
+            initial_capital,
+            initial_capital * 5,
+            initial_capital * 10,
+            initial_capital * 50,
+        ),
+    )
 
     # --- Save outputs ---
     if output_dir is None:
@@ -124,6 +151,10 @@ def run_trading_pipeline(
 
     if not attr.empty:
         attr.to_csv(output_dir / "cost_attribution.csv", index=False)
+    if not capacity["summary"].empty:
+        capacity["summary"].to_csv(output_dir / "capacity_summary.csv", index=False)
+    if not capacity["capital_curve"].empty:
+        capacity["capital_curve"].to_csv(output_dir / "capacity_curve.csv", index=False)
 
     # Save performance summary
     perf_df = pd.DataFrame([perf])
@@ -138,6 +169,9 @@ def run_trading_pipeline(
             "impact_coeff": cost_model.impact_coeff,
         },
         "initial_capital": initial_capital,
+        "benchmark_market": benchmark_market,
+        "benchmark_path": str(benchmark_path) if benchmark_path else None,
+        "risk_free_rate": risk_free_rate,
         "start_date": perf.get("start_date"),
         "end_date": perf.get("end_date"),
     }
@@ -180,5 +214,28 @@ def run_trading_pipeline(
         "daily_pnl": daily_pnl,
         "cost_attribution": attr,
         "performance": perf,
+        "capacity": capacity,
         "output_dir": output_dir,
     }
+
+
+def _load_benchmark_returns(
+    *,
+    market: Optional[str],
+    path: Optional[Path | str],
+    dates: pd.DatetimeIndex,
+) -> Optional[pd.Series]:
+    if market is None and path is None:
+        return None
+    try:
+        from quant_platform.core.data.benchmark import load_benchmark
+
+        bench = load_benchmark(market=market or "us", path=path)
+    except Exception as exc:
+        logger.warning("Benchmark load failed: {}", exc)
+        return None
+    if bench.empty or "return" not in bench.columns:
+        return None
+    bench["date"] = pd.to_datetime(bench["date"])
+    returns = bench.set_index("date")["return"].sort_index()
+    return returns.reindex(dates)

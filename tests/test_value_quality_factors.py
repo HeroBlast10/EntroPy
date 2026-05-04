@@ -131,16 +131,17 @@ def test_gross_profitability(sample_prices, sample_fundamentals):
 
 def test_asset_growth(sample_prices):
     """Test Asset Growth factor computation."""
-    # Need longer time series for YoY growth
-    dates = pd.date_range("2022-01-01", periods=300, freq="D")
+    dates = pd.date_range("2021-01-01", periods=900, freq="D")
+    report_dates = pd.date_range("2020-03-31", periods=12, freq="QE")
     fund_data = []
     
     for ticker in ["AAPL", "MSFT"]:
-        for i, date in enumerate(dates):
+        for i, report_date in enumerate(report_dates):
             fund_data.append({
-                "date": date,
+                "date": report_date + pd.Timedelta(days=45),
                 "ticker": ticker,
-                "total_assets": 50000.0 * (1 + i * 0.001),  # gradual growth
+                "report_date": report_date,
+                "total_assets": 50000.0 * (1 + i * 0.03),
             })
     
     fundamentals = pd.DataFrame(fund_data)
@@ -160,7 +161,7 @@ def test_asset_growth(sample_prices):
     result = factor._compute(prices, fundamentals)
     
     assert isinstance(result, pd.Series)
-    # Should have some values after 252 days
+    # Should have values once a same-quarter prior-year report exists.
     assert result.notna().sum() > 0
 
 

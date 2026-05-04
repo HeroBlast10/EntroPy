@@ -59,8 +59,10 @@ class Mom1M(FactorBase):
     )
     _DEFAULT_PERIOD = 21
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
+        if _feature_cache is not None:
+            return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
         return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
@@ -77,8 +79,10 @@ class Mom3M(FactorBase):
     )
     _DEFAULT_PERIOD = 63
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
+        if _feature_cache is not None:
+            return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
         return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
@@ -95,8 +99,10 @@ class Mom6M(FactorBase):
     )
     _DEFAULT_PERIOD = 126
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
+        if _feature_cache is not None:
+            return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
         return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
@@ -115,8 +121,10 @@ class Mom12_1M(FactorBase):
     )
     _DEFAULT_PERIOD = 252
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
+        if _feature_cache is not None:
+            return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
         # period-day return; lag= in meta will shift to skip the most-recent month
         return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
@@ -137,8 +145,10 @@ class STR1W(FactorBase):
     )
     _DEFAULT_PERIOD = 5
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
+        if _feature_cache is not None:
+            return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
         return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
@@ -157,8 +167,10 @@ class STR1M(FactorBase):
     )
     _DEFAULT_PERIOD = 21
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
+        if _feature_cache is not None:
+            return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
         return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
 
@@ -183,7 +195,7 @@ class MomPath(FactorBase):
 
     _DEFAULT_WINDOW = 126
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         window = int(self._extra_params.get("window", self._DEFAULT_WINDOW))
         df = prices.sort_values(["ticker", "date"])
 

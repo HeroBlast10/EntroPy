@@ -47,11 +47,19 @@ class OptimizedPortfolio(PortfolioConstructor):
         risk_aversion: float = 1.0,
         cov_lookback: int = 120,
         shrinkage: float = 0.5,
+        use_factor_risk: bool = True,
+        factor_risk_halflife: int = 60,
+        factor_risk_shrinkage: float = 0.5,
+        turnover_penalty: float = 0.0,
     ) -> None:
         super().__init__(config)
         self.risk_aversion = risk_aversion
         self.cov_lookback = cov_lookback
         self.shrinkage = shrinkage
+        self.use_factor_risk = use_factor_risk
+        self.factor_risk_halflife = factor_risk_halflife
+        self.factor_risk_shrinkage = factor_risk_shrinkage
+        self.turnover_penalty = turnover_penalty
 
     # ------------------------------------------------------------------
     # Core
@@ -80,7 +88,7 @@ class OptimizedPortfolio(PortfolioConstructor):
         alpha = sig_today.set_index("ticker")[sig_col].values.astype(float)
 
         # --- Estimate covariance from historical returns ---
-        cov = self._estimate_covariance(signal, tickers, date)
+        cov = self._estimate_covariance(signal, tickers, date, sig_col=sig_col)
         if cov is None:
             logger.warning("Covariance estimation failed on {} — using equal weight fallback", date.date())
             n = len(tickers)
@@ -105,6 +113,7 @@ class OptimizedPortfolio(PortfolioConstructor):
         signal: pd.DataFrame,
         tickers: np.ndarray,
         date: pd.Timestamp,
+        sig_col: Optional[str] = None,
     ) -> Optional[np.ndarray]:
         """Estimate a shrunk covariance matrix from recent returns.
 
@@ -127,6 +136,11 @@ class OptimizedPortfolio(PortfolioConstructor):
         if len(ret) < 30 or ret.shape[1] < 2:
             return None
 
+        if self.use_factor_risk:
+            factor_cov = self._estimate_factor_risk_covariance(hist, ret, tickers, sig_col)
+            if factor_cov is not None:
+                return factor_cov
+
         # Sample covariance
         S = ret.cov().values
         n = S.shape[0]
@@ -144,6 +158,92 @@ class OptimizedPortfolio(PortfolioConstructor):
             cov += (-eigvals.min() + 1e-8) * np.eye(n)
 
         return cov
+
+    def _estimate_factor_risk_covariance(
+        self,
+        hist: pd.DataFrame,
+        stock_returns: pd.DataFrame,
+        tickers: np.ndarray,
+        sig_col: Optional[str],
+    ) -> Optional[np.ndarray]:
+        """Build a stock covariance matrix from the factor risk model.
+
+        The optimizer consumes a stock-level covariance matrix, so this method
+        fits ``FactorRiskModel`` on recent stock returns and reconstructs
+        ``B F B' + diag(specific_var)``.  If the risk model cannot be estimated,
+        callers fall back to the original shrunk stock covariance.
+        """
+        try:
+            from quant_platform.core.portfolio.risk_model import FactorRiskModel
+        except Exception:
+            return None
+
+        factor_returns = pd.DataFrame(index=stock_returns.index)
+        factor_returns["market"] = stock_returns.mean(axis=1)
+
+        alpha_spread = self._historical_alpha_spread_returns(hist, stock_returns, tickers, sig_col)
+        if alpha_spread is not None and alpha_spread.notna().sum() >= 20:
+            factor_returns["alpha_spread"] = alpha_spread.reindex(factor_returns.index)
+
+        factor_returns = factor_returns.replace([np.inf, -np.inf], np.nan).dropna(how="all")
+        factor_returns = factor_returns.fillna(0.0)
+        if len(factor_returns) < 30 or factor_returns.shape[1] == 0:
+            return None
+
+        model = FactorRiskModel(
+            halflife=self.factor_risk_halflife,
+            shrinkage=self.factor_risk_shrinkage,
+        )
+        model.fit(stock_returns, factor_returns)
+        if model.exposures_ is None or model.exposures_.empty or model.cov_matrix_ is None:
+            return None
+
+        exposures = model.exposures_.reindex(tickers).fillna(0.0)
+        if exposures.empty:
+            return None
+
+        b = exposures.to_numpy(dtype=float)
+        factor_cov = model.cov_matrix_
+        spec = model.specific_risk_.reindex(tickers).fillna(model.specific_risk_.median())
+        spec_daily_var = (spec.fillna(0.0).to_numpy(dtype=float) / np.sqrt(252.0)) ** 2
+
+        cov = b @ factor_cov @ b.T + np.diag(spec_daily_var)
+        eigvals = np.linalg.eigvalsh(cov)
+        if eigvals.min() < 0:
+            cov += (-eigvals.min() + 1e-8) * np.eye(cov.shape[0])
+        logger.debug("Using factor risk covariance with {} factors", len(model.factor_names_ or []))
+        return cov
+
+    @staticmethod
+    def _historical_alpha_spread_returns(
+        hist: pd.DataFrame,
+        stock_returns: pd.DataFrame,
+        tickers: np.ndarray,
+        sig_col: Optional[str],
+    ) -> Optional[pd.Series]:
+        if not sig_col or sig_col not in hist.columns:
+            return None
+        scores = hist.pivot(index="date", columns="ticker", values=sig_col)
+        scores = scores.reindex(index=stock_returns.index, columns=tickers).shift(1)
+        spreads = {}
+        for dt, ret_row in stock_returns.iterrows():
+            score = scores.loc[dt].dropna()
+            if len(score) < 10:
+                continue
+            common = score.index.intersection(ret_row.dropna().index)
+            if len(common) < 10:
+                continue
+            score = score.loc[common]
+            ret = ret_row.loc[common]
+            long_cut = score.quantile(0.8)
+            short_cut = score.quantile(0.2)
+            longs = ret[score >= long_cut]
+            shorts = ret[score <= short_cut]
+            if len(longs) and len(shorts):
+                spreads[dt] = longs.mean() - shorts.mean()
+        if not spreads:
+            return None
+        return pd.Series(spreads, name="alpha_spread")
 
     # ------------------------------------------------------------------
     # QP solver
@@ -165,10 +265,18 @@ class OptimizedPortfolio(PortfolioConstructor):
 
         # --- Objective: minimise −(α'w) + (λ/2) w'Σw ---
         def objective(w):
-            return -(alpha @ w) + 0.5 * lam * (w @ cov @ w)
+            obj = -(alpha @ w) + 0.5 * lam * (w @ cov @ w)
+            if self.turnover_penalty > 0 and prev_weights is not None:
+                w_prev = prev_weights.reindex(tickers, fill_value=0.0).values
+                obj += self.turnover_penalty * np.sum((w - w_prev) ** 2)
+            return obj
 
         def grad(w):
-            return -alpha + lam * (cov @ w)
+            g = -alpha + lam * (cov @ w)
+            if self.turnover_penalty > 0 and prev_weights is not None:
+                w_prev = prev_weights.reindex(tickers, fill_value=0.0).values
+                g += 2.0 * self.turnover_penalty * (w - w_prev)
+            return g
 
         # --- Constraints ---
         constraints = []

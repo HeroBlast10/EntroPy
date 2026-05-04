@@ -77,6 +77,70 @@ def _compute_ttm(
     return pd.DataFrame(results)
 
 
+def _compute_report_yoy_change(
+    fund: pd.DataFrame,
+    metric_col: str,
+    *,
+    ticker_col: str = "ticker",
+    date_col: str = "date",
+    report_col: str = "report_date",
+    tolerance_days: int = 120,
+) -> pd.DataFrame:
+    """Compute year-over-year change using fiscal report dates, not row counts."""
+    required_cols = [ticker_col, date_col, report_col, metric_col]
+    if any(col not in fund.columns for col in required_cols):
+        return pd.DataFrame(columns=[date_col, ticker_col, f"{metric_col}_yoy"])
+
+    fund = fund[required_cols].copy()
+    fund[date_col] = pd.to_datetime(fund[date_col])
+    fund[report_col] = pd.to_datetime(fund[report_col])
+    fund = fund.dropna(subset=[metric_col, report_col])
+
+    results = []
+    tolerance = pd.Timedelta(days=tolerance_days)
+
+    for ticker, group in fund.groupby(ticker_col):
+        reports = (
+            group[[report_col, metric_col]]
+            .sort_values(report_col)
+            .drop_duplicates(subset=[report_col], keep="last")
+            .reset_index(drop=True)
+        )
+        if reports.empty:
+            continue
+
+        targets = reports[[report_col]].copy()
+        targets["_target_report_date"] = targets[report_col] - pd.DateOffset(years=1)
+
+        history = reports.rename(columns={
+            report_col: "_matched_report_date",
+            metric_col: f"{metric_col}_lag1y",
+        })
+
+        matched = pd.merge_asof(
+            targets.sort_values("_target_report_date"),
+            history.sort_values("_matched_report_date"),
+            left_on="_target_report_date",
+            right_on="_matched_report_date",
+            direction="nearest",
+            tolerance=tolerance,
+        )
+        matched[metric_col] = reports[metric_col].values
+        matched[f"{metric_col}_yoy"] = (
+            (matched[metric_col] - matched[f"{metric_col}_lag1y"])
+            / matched[f"{metric_col}_lag1y"]
+        )
+
+        report_yoy = matched[[report_col, f"{metric_col}_yoy"]]
+        expanded = group.merge(report_yoy, on=report_col, how="left")
+        results.append(expanded[[date_col, ticker_col, report_col, f"{metric_col}_yoy"]])
+
+    if not results:
+        return pd.DataFrame(columns=[date_col, ticker_col, report_col, f"{metric_col}_yoy"])
+
+    return pd.concat(results, ignore_index=True)
+
+
 def _merge_fundamentals_to_prices(
     prices: pd.DataFrame,
     fundamentals: pd.DataFrame,
@@ -273,18 +337,14 @@ class AssetGrowth(FactorBase):
             logger.warning("ASSET_GROWTH: no fundamentals data provided")
             return pd.Series(dtype=float)
         
-        fund = fundamentals[["date", "ticker", "total_assets"]].copy()
-        fund["date"] = pd.to_datetime(fund["date"])
-        fund = fund.sort_values(["ticker", "date"])
-        
-        # Compute YoY growth: (assets_t - assets_t-1y) / assets_t-1y
-        # Approximate 1 year = 252 trading days
-        fund["assets_lag1y"] = fund.groupby("ticker")["total_assets"].shift(252)
-        fund["asset_growth"] = (
-            (fund["total_assets"] - fund["assets_lag1y"]) / fund["assets_lag1y"]
+        yoy = _compute_report_yoy_change(
+            fundamentals,
+            "total_assets",
+            tolerance_days=120,
         )
-        
-        merged = _merge_fundamentals_to_prices(prices, fund, ["asset_growth"])
+        yoy = yoy.rename(columns={"total_assets_yoy": "asset_growth"})
+
+        merged = _merge_fundamentals_to_prices(prices, yoy, ["asset_growth"])
         result = merged.set_index(["date", "ticker"])["asset_growth"]
         return result
 
