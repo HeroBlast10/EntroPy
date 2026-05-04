@@ -78,7 +78,8 @@ def run_step(step_name: str, func, *args, **kwargs):
         raise
 
 
-def build_portfolio_step(signal_col: str, mode: str, freq: str, method: str, 
+def build_portfolio_step(signal_col: str, mode: str, freq: str, method: str,
+                        weight: str,
                         max_stock_weight: float, max_sector_weight: float):
     """Step 2: Build portfolio weights."""
     from quant_platform.core.portfolio.construction import PortfolioConfig, PortfolioMode, WeightScheme
@@ -86,7 +87,7 @@ def build_portfolio_step(signal_col: str, mode: str, freq: str, method: str,
 
     config = PortfolioConfig(
         mode=PortfolioMode(mode),
-        weight_scheme=WeightScheme("equal"),
+        weight_scheme=WeightScheme(weight),
         max_stock_weight=max_stock_weight,
         max_sector_weight=max_sector_weight,
         rebalance_freq=freq,
@@ -174,6 +175,8 @@ def generate_report_step(signal_col: str, output_path, run_walkforward: bool,
               default="M", help="Rebalance frequency.")
 @click.option("--method", type=click.Choice(["quantile", "optimize"]),
               default="quantile", help="Portfolio construction method.")
+@click.option("--weight", type=click.Choice(["equal", "market_cap", "signal", "inverse_vol"]),
+              default="equal", help="Portfolio weighting scheme.")
 @click.option("--max-stock-weight", type=float, default=0.05,
               help="Max weight per stock (default 5%%).")
 @click.option("--max-sector-weight", type=float, default=0.30,
@@ -187,7 +190,7 @@ def generate_report_step(signal_col: str, output_path, run_walkforward: bool,
 @click.option("--wf-step", type=int, default=12,
               help="Walk-forward step size (months).")
 def main(factors, all_factors, auto_best, optimize_by, list_factors,
-         output_dir, quick, mode, freq, method,
+         output_dir, quick, mode, freq, method, weight,
          max_stock_weight, max_sector_weight, capital,
          wf_train, wf_test, wf_step):
     """EntroPy — End-to-end factor research pipeline.
@@ -198,7 +201,7 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
     """
     set_project_root(_project_root)
 
-    from quant_platform.core.evaluation.report import select_best_factor
+    from quant_platform.core.signals.catalog import load_factor_catalog, select_best_factor_from_catalog
 
     cmp_path = resolve_data_path("factors", "factor_comparison.csv")
 
@@ -206,24 +209,30 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
     # List mode
     # ============================================
     if list_factors:
-        if not cmp_path.exists():
+        if not cmp_path.exists() and not resolve_data_path("factors", "factor_catalog.csv").exists():
             click.echo(
-                f"ERROR: {cmp_path} not found.\n"
+                f"ERROR: {cmp_path} / factor_catalog.csv not found.\n"
                 "Run 'python scripts/build_factors.py --evaluate' first to compute and evaluate all factors."
             )
             sys.exit(1)
         
-        comparison = pd.read_csv(cmp_path, index_col=0)
-        available = [f for f in comparison.index if pd.notna(comparison.loc[f, "ric_mean_ic"])]
+        catalog = load_factor_catalog()
+        if "eligible_for_portfolio" in catalog.columns:
+            catalog = catalog[catalog["eligible_for_portfolio"].astype(bool)]
+        available = list(catalog.index)
         
         click.echo(f"\n{'='*80}")
         click.echo(f"Available Factors ({len(available)} total)")
         click.echo(f"{'='*80}")
         
-        display_df = comparison.loc[available, [
-            "ric_mean_ic", "ric_icir", "ls_sharpe", "mean_turnover"
-        ]].copy()
-        display_df = display_df.sort_values("ric_mean_ic", ascending=False)
+        display_cols = [
+            c for c in ["signal_type", "selection_score", "deployability_score",
+                        "ric_mean_ic", "cost_adj_ls_sharpe", "ls_sharpe", "mean_turnover"]
+            if c in catalog.columns
+        ]
+        display_df = catalog.loc[available, display_cols].copy()
+        sort_col = "selection_score" if "selection_score" in display_df.columns else display_cols[-1]
+        display_df = display_df.sort_values(sort_col, ascending=False)
         
         click.echo("\nTop 10 factors ranked by RankIC Mean:")
         click.echo(display_df.head(10).to_string())
@@ -244,9 +253,10 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
         )
         sys.exit(1)
     
-    if not cmp_path.exists():
+    catalog_path = resolve_data_path("factors", "factor_catalog.csv")
+    if not cmp_path.exists() and not catalog_path.exists():
         click.echo(
-            f"\nERROR: {cmp_path} not found.\n"
+            f"\nERROR: {cmp_path} / {catalog_path} not found.\n"
             "You must run 'python scripts/build_factors.py --evaluate' first to evaluate factors."
         )
         sys.exit(1)
@@ -255,27 +265,31 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
     # Determine target factors
     # ============================================
     target_factors = []
-    comparison = pd.read_csv(cmp_path, index_col=0)
+    catalog = load_factor_catalog()
+    if "eligible_for_portfolio" in catalog.columns:
+        portfolio_catalog = catalog[catalog["eligible_for_portfolio"].astype(bool)].copy()
+    else:
+        portfolio_catalog = catalog.copy()
     
     if all_factors:
-        target_factors = [f for f in comparison.index if pd.notna(comparison.loc[f, "ric_mean_ic"])]
+        target_factors = list(portfolio_catalog.index)
         click.echo(f"\n📊 Pipeline will process ALL {len(target_factors)} factors")
         
     elif factors:
         target_factors = list(factors)
-        # Verify requested factors exist in comparison CSV
-        available = set(comparison.index)
+        # Verify requested factors exist in the unified catalog
+        available = set(catalog.index)
         missing = [f for f in target_factors if f not in available]
         if missing:
             click.echo(
-                f"\nERROR: Factor(s) not found in factor_comparison.csv: {', '.join(missing)}\n"
+                f"\nERROR: Factor(s) not found in factor catalog: {', '.join(missing)}\n"
                 f"Available factors: {', '.join(sorted(available)[:10])}..."
             )
             sys.exit(1)
         click.echo(f"\n📊 Pipeline will process {len(target_factors)} factor(s): {', '.join(target_factors)}")
         
     elif auto_best:
-        best = select_best_factor(comparison, metric=optimize_by)
+        best = select_best_factor_from_catalog(portfolio_catalog, metric=optimize_by)
         if best:
             target_factors = [best]
             click.echo(f"\n✨ Auto-selected best factor: {best} (by {optimize_by})")
@@ -312,7 +326,7 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
             weights_path = run_step(
                 f"Build Portfolio ({factor_name})",
                 build_portfolio_step,
-                factor_name, mode, freq, method, max_stock_weight, max_sector_weight
+                factor_name, mode, freq, method, weight, max_stock_weight, max_sector_weight
             )
             
             # Step 2: Run backtest

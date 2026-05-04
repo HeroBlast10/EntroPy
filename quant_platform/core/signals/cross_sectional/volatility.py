@@ -174,9 +174,13 @@ class Vol20D(FactorBase):
         references=["Ang, Hodrick, Xing & Zhang (2006)"],
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        ret = (
+            _feature_cache.get("ret_1d")
+            if _feature_cache is not None
+            else df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        )
         vol = ret.groupby(df["ticker"]).transform(
             lambda s: s.rolling(20, min_periods=15).std() * _ANN
         )
@@ -193,9 +197,13 @@ class Vol60D(FactorBase):
         direction=-1,
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        ret = (
+            _feature_cache.get("ret_1d")
+            if _feature_cache is not None
+            else df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        )
         vol = ret.groupby(df["ticker"]).transform(
             lambda s: s.rolling(60, min_periods=40).std() * _ANN
         )
@@ -219,12 +227,21 @@ class IdioVol(FactorBase):
         references=["Ang, Hodrick, Xing & Zhang (2006)"],
     )
 
-    def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
+    def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"]).copy()
-        df["ret"] = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        df["ret"] = (
+            _feature_cache.get("ret_1d")
+            if _feature_cache is not None
+            else df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        )
         # Market return: equal-weighted average across all tickers each day
-        mkt = df.groupby("date")["ret"].mean().rename("mkt_ret")
-        df = df.merge(mkt, on="date", how="left")
+        if _feature_cache is not None:
+            mkt = _feature_cache.get("market_ret").rename("mkt_ret")
+            mkt = mkt.reindex(df["date"]).reset_index(drop=True)
+            df["mkt_ret"] = mkt.values
+        else:
+            mkt = df.groupby("date")["ret"].mean().rename("mkt_ret")
+            df = df.merge(mkt, on="date", how="left")
 
         # Fast vectorized computation using Numba
         def _compute_idiovol(group: pd.DataFrame) -> pd.Series:

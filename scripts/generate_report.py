@@ -92,32 +92,39 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
     set_project_root(_project_root)
 
     import pandas as pd
-    from quant_platform.core.evaluation.report import generate_report, select_best_factor
+    from quant_platform.core.evaluation.report import generate_report
+    from quant_platform.core.signals.catalog import load_factor_catalog, select_best_factor_from_catalog
     from quant_platform.core.utils.io import resolve_data_path
 
     cmp_path = resolve_data_path("factors", "factor_comparison.csv")
 
     # --- List mode ---
     if list_factors:
-        if not cmp_path.exists():
+        if not cmp_path.exists() and not resolve_data_path("factors", "factor_catalog.csv").exists():
             click.echo(
-                f"ERROR: {cmp_path} not found.\n"
+                f"ERROR: {cmp_path} / factor_catalog.csv not found.\n"
                 "Run 'python scripts/build_factors.py --evaluate' first."
             )
             sys.exit(1)
         
-        comparison = pd.read_csv(cmp_path, index_col=0)
-        available = [f for f in comparison.index if pd.notna(comparison.loc[f, "ric_mean_ic"])]
+        catalog = load_factor_catalog()
+        if "eligible_for_portfolio" in catalog.columns:
+            catalog = catalog[catalog["eligible_for_portfolio"].astype(bool)]
+        available = list(catalog.index)
         
         click.echo(f"\n{'='*80}")
         click.echo(f"Available Factors ({len(available)} total)")
         click.echo(f"{'='*80}")
         
         # Display as table with key metrics
-        display_df = comparison.loc[available, [
-            "ric_mean_ic", "ric_icir", "ls_sharpe", "mean_turnover"
-        ]].copy()
-        display_df = display_df.sort_values("ric_mean_ic", ascending=False)
+        display_cols = [
+            c for c in ["signal_type", "selection_score", "deployability_score",
+                        "ric_mean_ic", "cost_adj_ls_sharpe", "ls_sharpe", "mean_turnover"]
+            if c in catalog.columns
+        ]
+        display_df = catalog.loc[available, display_cols].copy()
+        sort_col = "selection_score" if "selection_score" in display_df.columns else display_cols[-1]
+        display_df = display_df.sort_values(sort_col, ascending=False)
         
         click.echo("\nTop factors ranked by RankIC Mean:")
         click.echo(display_df.head(10).to_string())
@@ -131,15 +138,17 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
     
     if all_factors:
         # Load all factors from comparison CSV
-        if not cmp_path.exists():
+        if not cmp_path.exists() and not resolve_data_path("factors", "factor_catalog.csv").exists():
             click.echo(
-                f"ERROR: {cmp_path} not found.\n"
+                f"ERROR: {cmp_path} / factor_catalog.csv not found.\n"
                 "Run 'python scripts/build_factors.py --evaluate' first."
             )
             sys.exit(1)
         
-        comparison = pd.read_csv(cmp_path, index_col=0)
-        target_factors = [f for f in comparison.index if pd.notna(comparison.loc[f, "ric_mean_ic"])]
+        catalog = load_factor_catalog()
+        if "eligible_for_portfolio" in catalog.columns:
+            catalog = catalog[catalog["eligible_for_portfolio"].astype(bool)]
+        target_factors = list(catalog.index)
         click.echo(f"\n📊 Generating reports for ALL {len(target_factors)} factors...")
         
     elif factors:
@@ -149,15 +158,15 @@ def main(factors, all_factors, auto_best, optimize_by, list_factors,
         
     elif auto_best:
         # Auto-select best factor
-        if not cmp_path.exists():
+        if not cmp_path.exists() and not resolve_data_path("factors", "factor_catalog.csv").exists():
             click.echo(
-                f"WARNING: {cmp_path} not found.\n"
+                f"WARNING: {cmp_path} / factor_catalog.csv not found.\n"
                 "Run 'python scripts/build_factors.py --evaluate' first."
             )
             sys.exit(1)
         
-        comparison = pd.read_csv(cmp_path, index_col=0)
-        best = select_best_factor(comparison, metric=optimize_by)
+        catalog = load_factor_catalog()
+        best = select_best_factor_from_catalog(catalog, metric=optimize_by)
         if best:
             target_factors = [best]
             click.echo(f"\n✨ Auto-selected best factor: {best} (ranked by {optimize_by})")

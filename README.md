@@ -2,209 +2,269 @@
 
 # EntroPy
 
-**Do signal-processing and state-space features add value to equity factor portfolios?**
+**Production-oriented multi-factor equity research platform**
 
-A quantitative research platform that tests whether Kalman filters, regime detection, spectral entropy, and OU-process signals improve upon standard cross-sectional factors—under realistic transaction costs, point-in-time data, and rolling out-of-sample validation.
+EntroPy tests whether state-space, regime, entropy, mean-reversion, and classic cross-sectional factors can produce robust, cost-aware, capacity-aware equity alpha under point-in-time data discipline and rolling out-of-sample validation.
+
+[中文说明](README.zh-CN.md) | [Upgrade Notes](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Tests](https://img.shields.io/badge/tests-172%20passed-brightgreen.svg)](#testing)
 
 </div>
 
 ---
 
-## Research Question
+## Research Goal
 
-> **Do state-space / regime / entropy features provide verifiable incremental alpha over standard cross-sectional factors, after transaction costs?**
+EntroPy is built around one practical quant research question:
 
-Most multi-factor platforms stop at momentum + value + quality. This project asks whether signals from statistical physics and signal processing—Kalman velocity, spectral entropy, Hurst exponent, HMM regime detection—can improve risk-adjusted returns when combined with conventional factors.
+> Can advanced signal-processing features add incremental, tradable alpha after realistic costs, factor redundancy, multiple testing, benchmark risk, and capacity constraints?
 
-## Data
+The platform is designed to move beyond "best-looking factor backtests" and toward a production-style research workflow:
 
-| Item | Detail |
-|------|--------|
-| **Universe** | Liquidity-filtered large-cap US equities (top 500 by market cap, ADV ≥ $5M, dynamically reconstituted monthly) |
-| **Period** | 2010-01-01 to 2024-12-31 |
-| **Price data** | yfinance daily OHLCV, split-adjusted (point-in-time) |
-| **Fundamentals** | SimFin (income, balance, cashflow), 45-day publication lag to avoid look-ahead |
-| **Calendar** | NYSE (XNYS) via `exchange_calendars` |
-| **PIT discipline** | All signals use only data known as of each rebalance date; fundamentals lagged by reporting delay |
+- Correct signal direction and standardized effective signals.
+- Multi-horizon single-factor validation.
+- Multiple-testing controls to reduce data snooping.
+- Redundancy pruning to keep 3-5 complementary factors instead of many duplicates.
+- Comparable multi-factor combiners instead of static equal-weight z-score averaging.
+- Regime-aware factor allocation and exposure control.
+- Factor-risk-model-based portfolio optimization.
+- Benchmark-relative performance, transaction cost simulation, and capacity curves.
+- YAML-driven experiment orchestration for reproducible research.
 
-## Methodology
+## Core Capabilities
 
-### Signal Library (30+ signals, four types)
+| Area | Capabilities |
+| --- | --- |
+| Data layer | US/CN market calendar support, dynamic universe filters, point-in-time price and fundamental alignment, benchmark loading |
+| Signal library | Cross-sectional, time-series, regime, and relative-value factors |
+| Effective signal | `direction -> winsorize -> neutralize -> z-score -> rank` shared by evaluation, portfolio, ML, and reporting |
+| Single-factor research | 1/5/10/20d IC and RankIC, IC decay, quantile monotonicity, turnover, break-even cost, capacity, regime/subperiod/OOS stability |
+| Multiple testing | Benjamini-Hochberg FDR, Bonferroni, White Reality Check approximation, Deflated Sharpe approximation |
+| Redundancy pruning | Factor signal correlation, factor return correlation, exposure-vector similarity, cluster diagnostics, stepwise incremental alpha check |
+| Multi-factor alpha | Rolling ICIR weighting, factor-return mean-variance, factor-return risk parity, baseline-orthogonal incremental alpha |
+| Regime integration | Regime-driven factor weights, category enable/disable, net exposure, rebalance threshold, alpha scaling |
+| Portfolio construction | Quantile portfolios, optimized portfolios, equal/market-cap/signal/inverse-vol weighting, sector/stock/turnover constraints |
+| Risk model | Barra-style factor risk model with exposures, factor covariance, specific risk, and decomposition |
+| Execution and costs | Dynamic-NAV trade sizing, slippage, impact, commissions, borrow cost, cost attribution |
+| Backtest analytics | Net/gross NAV, drawdown, VaR/CVaR, benchmark alpha/beta/IR, capacity and capital scaling curves |
+| Experiments | YAML configs for factor sets, combiners, costs, walk-forward, benchmark, and capacity settings |
 
-| Type | Examples | Evaluation Scorecard | Purpose |
-|------|----------|---------------------|---------|
-| **Cross-sectional** (28) | MOM_12_1M, ILLIQ_AMIHUD, BOOK_TO_MARKET | IC / RankIC / monotonicity / turnover | Stock ranking |
-| **Time-series** (8) | KF_VELOCITY, SPECTRAL_ENTROPY, HURST | Hit rate / directional accuracy / directional Sharpe | Per-asset latent-state |
-| **Regime overlay** (1) | HMM_TURBULENCE_PROB | Overlay Sharpe improvement / drawdown reduction | Exposure modulation |
-| **Mean-reversion** (1) | OU_ZSCORE (single-stock) | Half-life / ADF stationarity / spread Sharpe | Mean-reversion quality |
+## Signal Library
 
-Each signal type is evaluated with its own scorecard (see `signals/evaluation/`), not forced through cross-sectional IC analysis.
+| Signal Type | Examples | Primary Use |
+| --- | --- | --- |
+| Cross-sectional | `MOM_12_1M`, `STR_1M`, `VOL_20D`, `ILLIQ_AMIHUD`, `BOOK_TO_MARKET`, `ROE`, `ASSET_GROWTH` | Stock ranking and portfolio construction |
+| Time-series | `KF_VELOCITY`, `KF_TREND_STRENGTH`, `SPECTRAL_ENTROPY_60D`, `HURST_60D`, rolling skew/kurtosis | Per-asset latent state and trend/noise features |
+| Regime | `HMM_TURBULENCE_PROB` | Market-state-aware factor allocation and exposure control |
+| Relative value | `OU_ZSCORE` | Mean-reversion quality and spread-style diagnostics |
 
-### Cross-Sectional Factors
+Factor metadata includes `direction`, `category`, `signal_type`, lookback, lag, and description. Negative-direction factors, such as low volatility or low asset growth, are flipped into a "higher is better" effective signal before evaluation or portfolio use.
 
-| Category | Count | Key Factors |
-|----------|-------|-------------|
-| **Momentum / Reversal** | 7 | `MOM_12_1M` (Jegadeesh-Titman), `MOM_PATH`, `STR_1W` |
-| **Volatility / Risk / Tail** | 9 | `IDIOVOL`, `REALIZED_JUMP` (BPV), `VOL_OF_VOL` (Heston proxy) |
-| **Liquidity / Volume** | 8 | `ILLIQ_AMIHUD`, `SPREAD_HL` (Corwin-Schultz), `PRICE_IMPACT` |
-| **Value / Quality** | 4 | `BOOK_TO_MARKET`, `EARNINGS_YIELD`, `ROE`, `GROSS_PROFITABILITY` |
+## Research Pipeline
 
-### Time-Series Features (Numba-accelerated)
-
-| Signal | Method | What it captures |
-|--------|--------|------------------|
-| `KF_VELOCITY` | Kalman filter (constant-acceleration model) | Denoised trend rate of change |
-| `KF_TREND_STRENGTH` | Kalman filter | Dimensionless trend strength |
-| `SPECTRAL_ENTROPY_60D` | FFT + Shannon entropy | Market randomness (1 = noise, 0 = periodic) |
-| `HURST_60D` | R/S analysis | Trending (>0.5) vs. mean-reverting (<0.5) |
-| `OU_ZSCORE` | Ornstein-Uhlenbeck MLE | Single-stock mean-reversion z-score |
-
-### Alpha Models
-
-| Model | Method | Description |
-|-------|--------|-------------|
-| **Linear ensemble** | Rank-weighted average | Equal- or fixed-weight combination of factor z-scores |
-| **Ridge/Lasso regression** | Regularized cross-sectional regression | ML-based alpha: Fama-MacBeth + L1/L2, walk-forward monthly retraining |
-| **Regime overlay** | HMM modulation | Scale portfolio exposure based on turbulence probability |
-
-The ML alpha model uses **Purged K-Fold CV** (Lopez de Prado) to prevent look-ahead bias, and **expanding-window walk-forward** retraining every 21 trading days.
-
-### Portfolio Construction
-
-| Component | Implementation |
-|-----------|---------------|
-| **Stock selection** | Quantile-based (top/bottom quintile) |
-| **Weighting** | Equal weight, market-cap weight, signal-proportional, or **inverse-volatility** (naive risk parity) |
-| **Rebalance** | Monthly (last trading day), with explicit position zeroing to prevent stale holdings |
-| **Risk model** | Barra-style factor decomposition (Market / Size / Value betas, EWMA + Ledoit-Wolf shrinkage, specific risk from regression residuals) |
-
-### Risk Management
-
-| Metric | Method |
-|--------|--------|
-| **VaR** | Historical, Parametric (Gaussian), Cornish-Fisher (skew/kurtosis adjusted) |
-| **CVaR** | Conditional VaR (Expected Shortfall) |
-| **Risk decomposition** | Factor risk vs. specific risk breakdown; per-factor contribution |
-| **Benchmark analytics** | Alpha, Beta, Information Ratio, Treynor Ratio vs. equal-weight benchmark |
-
-### Transaction Cost Model (US Equity)
-
-| Component | Model | Default |
-|-----------|-------|---------|
-| Commission | Per-share | $0.005/share |
-| Slippage | Fixed half-spread | 5 bps |
-| Market Impact | √-model (Almgren-Chriss) | `0.1 × σ × √(participation)` |
-| SEC Fee | Sells only | $8 / $1M |
-
-### Validation
-
-| Technique | Description |
-|-----------|-------------|
-| **Rolling OOS check** | 36-month train / 12-month test / 12-month step; reports in-sample vs. OOS IC and Sharpe |
-| **Ablation study** | Incrementally add signal groups to isolate marginal contribution |
-| **Cost stress test** | Sweep transaction costs from 0 to 20 bps to find break-even point |
-
-> **Note:** The rolling OOS check is a simplified train/test sanity check. It does not perform per-fold factor selection or hyperparameter tuning; portfolio construction is fixed (top quintile, equal weight).
-
-## Ablation Design
-
-| Scenario | Factors | Regime Overlay |
-|----------|---------|----------------|
-| `baseline_only` | MOM + STR + VOL + ILLIQ | No |
-| `baseline_plus_value` | + BOOK_TO_MARKET + EARNINGS_YIELD + ROE + GP | No |
-| `baseline_plus_kalman` | + KF_VELOCITY + KF_TREND | No |
-| `baseline_plus_noise` | + ENTROPY + HURST | No |
-| `baseline_plus_regime` | baseline | Yes (HMM) |
-| `ml_alpha` | Ridge regression on all factors | No |
-| `full_ensemble` | All signals | Yes |
-
-Evaluated on: IC, net Sharpe, max drawdown, turnover, cost stress test (0–20 bps).
-
-## Known Limitations
-
-1. **Universe is approximate.** We use a dynamically reconstituted top-500-by-market-cap universe with a $5M ADV filter, not official S&P 500 historical constituents. This introduces mild survivorship bias.
-2. **Rolling OOS is simplified.** The walk-forward validation does not perform per-fold factor selection, parameter tuning, or model retraining. It is a sanity check, not a production walk-forward framework.
-3. **OU z-score is single-stock.** `OU_ZSCORE` fits an Ornstein-Uhlenbeck process to individual log-prices, not pair spreads. It is a single-stock mean-reversion signal, not pairs trading.
-4. **No intraday data.** All signals are computed on daily OHLCV. Intraday microstructure effects are not captured.
-5. **Factor covariance is simplified.** The Barra-style risk model uses time-series regression with 3 factors (Market, Size, Value). Production Barra models use 40+ factors with cross-sectional regression.
-6. **ML alpha is linear.** The current ML model uses Ridge/Lasso regression. Non-linear models (XGBoost, neural networks) are not yet implemented.
-
-## Architecture
-
+```mermaid
+flowchart LR
+    A["Raw prices and fundamentals"] --> B["Point-in-time dataset"]
+    B --> C["Factor registry and batch compute"]
+    C --> D["Effective signal layer"]
+    D --> E["Single-factor evaluation"]
+    E --> F["Multiple-testing controls"]
+    F --> G["Redundancy pruning"]
+    G --> H["Multi-factor combiner"]
+    H --> I["Regime-aware alpha"]
+    I --> J["Portfolio construction"]
+    J --> K["Execution and cost simulation"]
+    K --> L["Benchmark, risk, capacity analytics"]
+    L --> M["HTML reports and experiment artifacts"]
 ```
-quant_platform/
-├── core/
-│   ├── data/                          # Data layer (PIT-aware, multi-market)
-│   │   ├── calendar.py                #   Trading calendars (XNYS, XSHG, XSHE)
-│   │   ├── universe.py                #   Dynamic universe: top-N by mcap + ADV filter
-│   │   ├── adapters/                  #   Market-specific data pipelines
-│   │   └── market_rules/              #   Market-specific constraints
-│   │
-│   ├── signals/                       # 4-tier signal library (30+ signals)
-│   │   ├── base.py                    #   FactorBase + FactorMeta (with signal_type)
-│   │   ├── registry.py                #   Auto-discovery & batch compute
-│   │   ├── cross_sectional/           #   28 CS factors (momentum, vol, liquidity, value/quality)
-│   │   ├── time_series/               #   Kalman, spectral entropy, Hurst, higher moments
-│   │   ├── regime/                    #   HMM turbulence probability
-│   │   ├── relative_value/            #   OU process z-score (single-stock mean reversion)
-│   │   └── evaluation/                #   Type-specific scorecards (CS / TS / regime / RV)
-│   │
-│   ├── alpha_models/                  # Signal → alpha score
-│   │   ├── cross_sectional_ranker.py  #   CS factor composite ranking
-│   │   ├── ml_alpha.py                #   Ridge/Lasso + Purged K-Fold CV + walk-forward
-│   │   ├── regime_overlay.py          #   HMM-based weight modulation
-│   │   └── ensemble.py                #   Multi-model combination
-│   │
-│   ├── portfolio/                     # Portfolio construction & risk
-│   │   ├── quantile.py                #   Quantile selection + 4 weighting schemes
-│   │   ├── rebalance.py               #   Weight carry-forward with explicit position zeroing
-│   │   └── risk_model.py              #   Barra-style factor risk decomposition
-│   │
-│   ├── execution/
-│   │   ├── backtest/                  #   Vectorized daily backtest + PnL
-│   │   └── cost_models/               #   US equity + CN A-share transaction costs
-│   │
-│   └── evaluation/
-│       ├── walkforward.py             #   Rolling OOS check (train/test split)
-│       ├── risk_metrics.py            #   VaR / CVaR (Historical, Parametric, Cornish-Fisher)
-│       ├── risk_plots.py              #   Risk visualization (rolling VaR, distributions)
-│       ├── benchmark_analytics.py     #   Alpha, Beta, IR, Treynor vs. benchmark
-│       └── report.py                  #   12-section HTML research report
-│
-└── tests/                             # Unit tests for all modules
+
+## Multi-Factor Combination
+
+EntroPy supports several comparable production-style combiners:
+
+| Combiner | Method | When to Use |
+| --- | --- | --- |
+| `rolling_icir` | Weight factors by rolling RankIC mean divided by volatility | Baseline adaptive factor allocation |
+| `mean_variance` | Use factor long-short return mean and covariance | Return/risk optimized factor allocation |
+| `risk_parity` | Inverse volatility of factor return streams | Robust allocation when expected returns are noisy |
+| `orthogonal_incremental` | Residualize candidate factors against baseline factors before weighting | Testing whether advanced signals add true incremental alpha |
+
+## Experiment Runner
+
+Experiments in `quant_platform/experiments/*.yaml` are executable. They define data ranges, factor sets, redundancy thresholds, combiners, portfolio constraints, costs, benchmark settings, and capacity grids.
+
+```bash
+# List experiments
+python scripts/run_experiment.py --list
+
+# Run a baseline multi-factor experiment
+python scripts/run_experiment.py --config quant_platform/experiments/us_baseline.yaml
+
+# Run the advanced signal lab experiment
+python scripts/run_experiment.py --config quant_platform/experiments/us_signal_lab.yaml
 ```
+
+Typical outputs are written to `data/experiments/<experiment_name>/`:
+
+- `selected_factors.csv`
+- `redundancy_*.csv`
+- `weights_<experiment>.parquet`
+- `factor_weights.csv`
+- `regime_controls.csv`
+- `backtest/performance_summary.csv`
+- `backtest/capacity_summary.csv`
+- `backtest/capacity_curve.csv`
+- `experiment_summary.json`
 
 ## Quick Start
 
 ```bash
 pip install -r requirements.txt
 
-# End-to-end pipeline
-python scripts/build_dataset.py                    # 1. Download & align price data
-python scripts/build_factors.py --evaluate         # 2. Compute & evaluate all signals
-python scripts/build_portfolio.py --signal MOM_12_1M  # 3. Build portfolio weights
-python scripts/run_backtest.py                     # 4. Simulate execution + PnL
-python scripts/generate_report.py --signal MOM_12_1M  # 5. Generate HTML research report
+# 1. Build the point-in-time dataset
+python scripts/build_dataset.py
 
-# One-command pipeline (compute → portfolio → backtest → report)
+# 2. Compute and evaluate all factors
+python scripts/build_factors.py --evaluate
+
+# 3. Build a single-factor portfolio
+python scripts/build_portfolio.py --signal MOM_12_1M
+
+# 4. Run execution-aware backtest
+python scripts/run_backtest.py
+
+# 5. Generate research report
+python scripts/generate_report.py --signal MOM_12_1M
+```
+
+Multi-factor portfolio example:
+
+```bash
+python scripts/build_portfolio.py \
+  --factors MOM_12_1M \
+  --factors STR_1M \
+  --factors VOL_20D \
+  --factors ILLIQ_AMIHUD \
+  --combiner rolling_icir \
+  --method optimize \
+  --turnover-penalty 0.1
+```
+
+One-command factor pipeline:
+
+```bash
 python scripts/run_factor_pipeline.py --factors MOM_12_1M
+python scripts/run_factor_pipeline.py --auto-best
 python scripts/run_factor_pipeline.py --all-factors --quick
+```
 
-# Factor parameter tuning
+Factor tuning:
+
+```bash
 python scripts/tune_factors.py --objective ric_icir --top 5
 ```
 
-**Output:** Self-contained HTML report with 12 sections: executive summary, all-factor comparison, NAV & drawdown, monthly heatmap, rolling Sharpe, turnover, IC/RankIC, factor correlation, cost attribution, rolling OOS check, VaR/CVaR risk metrics, and ablation study.
+## Portfolio and Backtest
 
-## Tests
+### Portfolio Construction
+
+- Quantile long-only and long-short portfolios.
+- Optimized portfolios with factor-risk covariance fallback to shrunk stock covariance.
+- Equal, market-cap, signal-proportional, and inverse-volatility weighting.
+- Stock-level, sector-level, and turnover constraints.
+- Regime-aware cash holding through net exposure scaling.
+
+### Execution and Costs
+
+- Trades are generated from daily weight changes.
+- Trade size follows evolving portfolio NAV.
+- Costs include commission, slippage, square-root market impact, regulatory fees, stamp duty placeholder, and borrow cost.
+- Borrow cost is based on dynamic NAV and short exposure.
+
+### Benchmark and Capacity
+
+Backtests can include benchmark-relative analytics:
+
+- Active return and tracking error.
+- Information ratio.
+- CAPM alpha, beta, alpha t-stat, and residual volatility.
+
+Capacity analytics include:
+
+- Participation rate.
+- ADV notional percentage.
+- 10% ADV capacity estimate.
+- Cost elasticity under different capital levels.
+- Estimated net Sharpe by capital size.
+
+## Architecture
+
+```text
+quant_platform/
+├── core/
+│   ├── data/                  # PIT data, calendars, universe, benchmark, sector map
+│   ├── signals/               # Factor base, registry, effective signal, selection, redundancy
+│   │   ├── cross_sectional/    # Momentum, volatility, liquidity, value/quality factors
+│   │   ├── time_series/        # Kalman, entropy, Hurst, higher moments
+│   │   ├── regime/             # HMM turbulence probability
+│   │   ├── relative_value/     # OU mean-reversion features
+│   │   └── evaluation/         # Type-specific evaluation scorecards
+│   ├── alpha_models/           # Ranker, ML alpha, regime overlay, multi-factor combiner
+│   ├── portfolio/              # Quantile, optimizer, constraints, risk model, pipeline
+│   ├── execution/              # Cost models, vectorized backtest, PnL
+│   ├── evaluation/             # Walk-forward, ablation, benchmark, capacity, reports
+│   └── experiments/            # YAML experiment runner
+├── experiments/                # Experiment YAML configs
+├── scripts/                    # CLI entry points
+├── tests/                      # Unit and regression tests
+└── docs/                       # Design and upgrade documentation
+```
+
+## Key Commands
+
+| Command | Purpose |
+| --- | --- |
+| `python scripts/build_dataset.py` | Build price/universe/fundamental data |
+| `python scripts/build_factors.py --evaluate` | Compute factors and save factor catalog |
+| `python scripts/build_portfolio.py` | Build portfolio weights |
+| `python scripts/run_backtest.py` | Run execution-aware backtest |
+| `python scripts/generate_report.py` | Generate HTML research report |
+| `python scripts/run_factor_pipeline.py` | Run factor-to-report pipeline |
+| `python scripts/run_experiment.py` | Run YAML-defined experiment |
+| `python scripts/tune_factors.py` | Run factor parameter tuning |
+
+## Testing
 
 ```bash
-pytest tests/ -v
+python -m compileall quant_platform scripts
+pytest -q
 ```
+
+Latest verified result:
+
+```text
+172 passed
+```
+
+## Known Limitations
+
+- The default US universe approximates large-cap index membership using dynamic market-cap and liquidity filters; it is not official historical S&P 500 membership.
+- Daily OHLCV data cannot capture intraday execution and microstructure effects.
+- The factor risk model is intentionally compact compared with commercial Barra models.
+- White Reality Check and Deflated Sharpe are lightweight approximations intended for research hygiene, not a full academic replication package.
+- Fundamental data quality depends on SimFin coverage and reporting lag assumptions.
+- CN A-share support includes configuration and cost-model hooks, but local data availability and market-specific execution rules should be validated before production use.
+
+## Documentation
+
+- [Production Factor Research Upgrade](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md)
+- [Data Dictionary](docs/data_dictionary.md)
+- [Factor Dictionary](docs/factor_dictionary.md)
+- [Portfolio Dictionary](docs/portfolio_dictionary.md)
+- [Trading Dictionary](docs/trading_dictionary.md)
 
 ## Tech Stack
 

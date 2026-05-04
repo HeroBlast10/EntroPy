@@ -17,6 +17,7 @@ import pandas as pd
 from loguru import logger
 
 from quant_platform.core.signals.base import FactorMeta
+from quant_platform.core.signals.effective import build_effective_signal
 
 
 class CrossSectionalScorecard:
@@ -64,6 +65,7 @@ class CrossSectionalScorecard:
             on=["date", "ticker"],
             how="inner",
         )
+        eval_df = build_effective_signal(eval_df, signal_col, direction=meta.direction)
         eval_df = eval_df.dropna(subset=[signal_col, "fwd_ret"])
         
         if len(eval_df) == 0:

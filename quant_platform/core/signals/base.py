@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -98,6 +99,7 @@ class FactorBase(abc.ABC):
         self,
         prices: pd.DataFrame,
         fundamentals: Optional[pd.DataFrame] = None,
+        **kwargs,
     ) -> pd.Series:
         """Return raw factor values indexed like *prices* ``(date, ticker)``.
 
@@ -150,7 +152,7 @@ class FactorBase(abc.ABC):
         logger.debug("Computing factor: {}", name)
 
         # 1. Raw signal
-        raw = self._compute(prices, fundamentals)
+        raw = self._call_compute(prices, fundamentals, **kwargs)
         if isinstance(raw, pd.Series):
             raw.name = name
 
@@ -187,6 +189,26 @@ class FactorBase(abc.ABC):
         logger.info("Factor {}: {} rows, date range {} – {}",
                      name, len(df), df["date"].min(), df["date"].max())
         return df[["date", "ticker", name]]
+
+    def _call_compute(
+        self,
+        prices: pd.DataFrame,
+        fundamentals: Optional[pd.DataFrame] = None,
+        **kwargs,
+    ) -> pd.Series:
+        """Dispatch to ``_compute`` while only forwarding supported kwargs."""
+        signature = inspect.signature(self._compute)
+        if any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        ):
+            return self._compute(prices, fundamentals, **kwargs)
+
+        supported_kwargs = {
+            key: value for key, value in kwargs.items()
+            if key in signature.parameters
+        }
+        return self._compute(prices, fundamentals, **supported_kwargs)
 
     # ------------------------------------------------------------------
     # Convenience

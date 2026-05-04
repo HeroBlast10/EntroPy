@@ -48,7 +48,9 @@ logger.add(sys.stderr, level="INFO", format=(
               help="List all available factors and exit.")
 @click.option("--periods", "-p", multiple=True, type=int, default=[1, 5, 10, 20],
               help="Forward return periods (trading days) for evaluation.")
-def main(factors, evaluate, list_factors, periods):
+@click.option("--use-cache/--no-cache", default=True,
+              help="Use shared price feature cache during factor computation.")
+def main(factors, evaluate, list_factors, periods, use_cache):
     """EntroPy — Compute and evaluate alpha factors."""
     set_project_root(_project_root)
 
@@ -87,7 +89,12 @@ def main(factors, evaluate, list_factors, periods):
 
     # --- Compute ---
     factor_names = list(factors) if factors else None
-    factor_df = reg.compute_all(prices, fundamentals=fundamentals, factor_names=factor_names)
+    factor_df = reg.compute_all(
+        prices,
+        fundamentals=fundamentals,
+        factor_names=factor_names,
+        use_cache=use_cache,
+    )
     out_path = reg.save_factors(factor_df)
     click.echo(f"\n✓ Factors saved → {out_path}")
 
@@ -98,11 +105,20 @@ def main(factors, evaluate, list_factors, periods):
             compare_factors,
             factor_tearsheet,
         )
+        from quant_platform.core.signals.catalog import save_factor_catalog
         from quant_platform.core.signals.evaluation.router import evaluate_signal
+        from quant_platform.core.signals.factor_selection import (
+            apply_deployability_filters,
+            apply_multiple_testing_controls,
+        )
 
         prices_with_fwd = add_forward_returns(prices, periods=list(periods))
+        price_eval_cols = ["date", "ticker"] + [f"fwd_ret_{p}d" for p in periods]
+        for extra_col in ("adj_close", "close", "volume", "amount"):
+            if extra_col in prices_with_fwd.columns:
+                price_eval_cols.append(extra_col)
         eval_df = factor_df.merge(
-            prices_with_fwd[["date", "ticker"] + [f"fwd_ret_{p}d" for p in periods]],
+            prices_with_fwd[price_eval_cols],
             on=["date", "ticker"],
             how="inner",
         )
@@ -120,7 +136,13 @@ def main(factors, evaluate, list_factors, periods):
 
                 if meta.signal_type == "cross_sectional":
                     # Standard IC / RankIC tearsheet for cross-sectional factors
-                    ts = factor_tearsheet(eval_df, fc, return_col="fwd_ret_1d")
+                    ts = factor_tearsheet(
+                        eval_df,
+                        fc,
+                        return_col="fwd_ret_1d",
+                        direction=meta.direction,
+                        forward_periods=list(periods),
+                    )
                     tearsheets[fc] = ts
                 else:
                     # Type-specific scorecard (time_series / regime / relative_value)
@@ -135,9 +157,12 @@ def main(factors, evaluate, list_factors, periods):
             except Exception as exc:
                 logger.error("Evaluation failed for {}: {}", fc, exc)
 
+        comparison = None
         # Cross-sectional comparison table (IC-based)
         if tearsheets:
             comparison = compare_factors(tearsheets)
+            comparison = apply_multiple_testing_controls(comparison, tearsheets)
+            comparison = apply_deployability_filters(comparison)
             click.echo("\n" + "=" * 80)
             click.echo("FACTOR COMPARISON — Cross-Sectional (1-day forward return)")
             click.echo("=" * 80)
@@ -177,6 +202,9 @@ def main(factors, evaluate, list_factors, periods):
                 serializable[fc] = entry
             typed_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
             click.echo(f"\n✓ Type-specific evaluation saved → {typed_path}")
+
+        catalog_path = save_factor_catalog(reg, comparison=comparison, typed_results=typed_results)
+        click.echo(f"\nUnified factor catalog saved -> {catalog_path}")
 
 
 if __name__ == "__main__":

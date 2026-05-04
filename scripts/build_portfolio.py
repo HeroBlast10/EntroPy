@@ -47,9 +47,17 @@ logger.add(sys.stderr, level="INFO", format=(
               default="quantile", help="Construction method.")
 @click.option("--signal", "-s", type=str, default=None,
               help="Factor column to use as alpha signal.")
+@click.option("--factors", multiple=True, default=None,
+              help="Multiple factor columns to combine into alpha_multi.")
+@click.option("--combiner", type=click.Choice(["rolling_icir", "mean_variance", "risk_parity", "orthogonal_incremental"]),
+              default="rolling_icir", help="Multi-factor combiner for --factors.")
+@click.option("--baseline-factor", multiple=True, default=None,
+              help="Baseline factors for orthogonal_incremental combiner.")
+@click.option("--regime-col", type=str, default=None,
+              help="Regime column that modulates factor weights and exposure.")
 @click.option("--mode", type=click.Choice(["long_only", "long_short"]),
               default="long_only", help="Portfolio mode.")
-@click.option("--weight", "-w", type=click.Choice(["equal", "market_cap", "signal"]),
+@click.option("--weight", "-w", type=click.Choice(["equal", "market_cap", "signal", "inverse_vol"]),
               default="equal", help="Weighting scheme.")
 @click.option("--freq", "-f", type=click.Choice(["D", "W", "M"]),
               default="M", help="Rebalance frequency.")
@@ -64,8 +72,14 @@ logger.add(sys.stderr, level="INFO", format=(
               help="Max one-way turnover per rebalance (e.g. 0.30).")
 @click.option("--risk-aversion", type=float, default=1.0,
               help="Risk aversion λ for optimised method.")
-def main(method, signal, mode, weight, freq, n_quantiles, top_n,
-         max_stock_weight, max_sector_weight, max_turnover, risk_aversion):
+@click.option("--no-factor-risk", is_flag=True, default=False,
+              help="Disable FactorRiskModel covariance in optimized portfolios.")
+@click.option("--turnover-penalty", type=float, default=0.0,
+              help="Quadratic turnover penalty for optimized portfolios.")
+def main(method, signal, factors, combiner, baseline_factor, regime_col,
+         mode, weight, freq, n_quantiles, top_n,
+         max_stock_weight, max_sector_weight, max_turnover, risk_aversion,
+         no_factor_risk, turnover_penalty):
     """EntroPy — Build portfolio weights from factor signals."""
     set_project_root(_project_root)
 
@@ -86,11 +100,17 @@ def main(method, signal, mode, weight, freq, n_quantiles, top_n,
     constructor_kwargs = {}
     if method == "optimize":
         constructor_kwargs["risk_aversion"] = risk_aversion
+        constructor_kwargs["use_factor_risk"] = not no_factor_risk
+        constructor_kwargs["turnover_penalty"] = turnover_penalty
 
     result = run_portfolio_pipeline(
         method=method,
         signal_col=signal,
+        factor_cols=list(factors) if factors else None,
         config=config,
+        multi_factor_method=combiner,
+        baseline_factors=list(baseline_factor) if baseline_factor else None,
+        regime_col=regime_col,
         **constructor_kwargs,
     )
 

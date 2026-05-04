@@ -16,6 +16,7 @@ import pandas as pd
 from loguru import logger
 
 from quant_platform.core.signals.base import FactorMeta
+from quant_platform.core.signals.orientation import apply_direction
 
 
 class RelativeValueScorecard:
@@ -70,7 +71,7 @@ class RelativeValueScorecard:
                 continue
             
             # Estimate half-life from signal autocorrelation
-            signal_vals = group[signal_col].values
+            signal_vals = apply_direction(group[signal_col], meta.direction).values
             if len(signal_vals) > 1:
                 # Simple autocorrelation-based half-life estimate
                 acf_1 = np.corrcoef(signal_vals[:-1], signal_vals[1:])[0, 1]
@@ -90,7 +91,7 @@ class RelativeValueScorecard:
             # Simulate mean-reversion trades
             # Entry: when |z-score| > 2, Exit: when z-score crosses 0
             returns = group["close"].pct_change()
-            z_score = group[signal_col]
+            z_score = apply_direction(group[signal_col], meta.direction)
             
             position = 0  # 0 = no position, +1 = long, -1 = short
             trade_returns = []
@@ -134,7 +135,9 @@ class RelativeValueScorecard:
             entry_exit_ratio = 0.0
         
         # Mean reversion quality (R² of signal vs lagged signal)
-        all_signals = eval_df.groupby("ticker")[signal_col].apply(list)
+        all_signals = eval_df.groupby("ticker")[signal_col].apply(
+            lambda s: apply_direction(s, meta.direction).tolist()
+        )
         r_squared_values = []
         for signals in all_signals:
             if len(signals) > 2:

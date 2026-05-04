@@ -183,24 +183,39 @@ def run_full_ablation(
     from quant_platform.core.portfolio.rebalance import carry_forward_weights, rebalance_dates
     from quant_platform.core.execution.backtest.vectorized_daily import simulate_execution
     from quant_platform.core.data.calendar import trading_dates
+    from quant_platform.core.signals.effective import build_effective_signal
 
     rows = []
     for scenario in scenarios:
         logger.info("Ablation: {}", scenario.name)
 
         try:
+            scenario_prices = prices.copy()
+            scenario_universe = universe.copy()
+            if scenario.universe_min_cap is not None and "market_cap" in scenario_universe.columns:
+                scenario_universe = scenario_universe[
+                    scenario_universe["market_cap"].fillna(0.0) >= scenario.universe_min_cap
+                ].copy()
+
+            neutralize_by = None
+            if "market_cap" in scenario_universe.columns:
+                mcap = scenario_universe[["date", "ticker", "market_cap"]].drop_duplicates()
+                scenario_prices = scenario_prices.merge(mcap, on=["date", "ticker"], how="left")
+                scenario_prices["log_mcap"] = np.log(scenario_prices["market_cap"].clip(lower=1.0))
+                if not scenario.skip_neutralize:
+                    neutralize_by = ["log_mcap"]
+
             # --- Factor computation ---
             reg = FactorRegistry()
             reg.discover()
 
             winsorize_limits = (0.01, 0.99) if not scenario.skip_winsorize else (0.0, 1.0)
-            neutralize_by = None  # baseline has no neutralize cols in prices
-            # (In a full setup, you'd pass ["sector", "log_mcap"])
 
             factor_df = reg.compute_all(
-                prices,
-                factor_names=[signal_col] if signal_col in reg._registry else None,
+                scenario_prices,
+                factor_names=[signal_col] if signal_col in reg else None,
                 winsorize_limits=winsorize_limits,
+                neutralize_by=neutralize_by,
                 zscore=True,
             )
 
@@ -210,7 +225,12 @@ def run_full_ablation(
             else:
                 sig = signal_col
 
-            signal = factor_df[["date", "ticker", sig]]
+            direction = reg.get(sig).meta.direction if sig in reg else 1
+            signal = build_effective_signal(
+                factor_df[["date", "ticker", sig]],
+                sig,
+                direction=direction,
+            )
 
             # --- Portfolio ---
             freq = scenario.rebalance_freq or "M"
@@ -229,7 +249,7 @@ def run_full_ablation(
             )
 
             constructor = QuantilePortfolio(config)
-            weights = constructor.build(signal, universe, reb)
+            weights = constructor.build(signal, scenario_universe, reb)
 
             if weights.empty:
                 logger.warning("Ablation {}: no weights generated", scenario.name)

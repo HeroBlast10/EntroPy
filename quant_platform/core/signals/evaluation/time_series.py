@@ -16,6 +16,7 @@ import pandas as pd
 from loguru import logger
 
 from quant_platform.core.signals.base import FactorMeta
+from quant_platform.core.signals.orientation import orient_signal_frame
 
 
 class TimeSeriesScorecard:
@@ -60,6 +61,7 @@ class TimeSeriesScorecard:
             on=["date", "ticker"],
             how="inner",
         )
+        eval_df = orient_signal_frame(eval_df, signal_col, meta.direction)
         eval_df = eval_df.dropna(subset=[signal_col, "fwd_ret"])
         
         if len(eval_df) == 0:

@@ -35,6 +35,39 @@ from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import TimeSeriesSplit
 
+from quant_platform.core.signals.effective import build_effective_signal
+
+
+def _apply_effective_ml_features(factors: pd.DataFrame, feature_cols: List[str]) -> pd.DataFrame:
+    """Convert raw ML feature columns to the shared effective signal scale."""
+    if "date" not in factors.columns or "ticker" not in factors.columns:
+        return factors
+
+    result = factors.copy()
+    directions = _infer_feature_directions(feature_cols)
+    base_index = result.set_index(["date", "ticker"]).index
+    for col in feature_cols:
+        if col not in result.columns:
+            continue
+        eff = build_effective_signal(
+            result[["date", "ticker", col]].copy(),
+            col,
+            direction=directions.get(col, 1),
+        )
+        result[col] = eff.set_index(["date", "ticker"])[col].reindex(base_index).values
+    return result
+
+
+def _infer_feature_directions(feature_cols: List[str]) -> Dict[str, int]:
+    try:
+        from quant_platform.core.signals.registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.discover()
+        return {col: reg.get(col).meta.direction for col in feature_cols if col in reg}
+    except Exception:
+        return {}
+
 
 # ===================================================================
 # Purged K-Fold Cross-Validation (Lopez de Prado)
@@ -214,6 +247,19 @@ class MLAlphaModel:
             c for c in factors.columns
             if c not in ("date", "ticker", "forward_return")
         ]
+        factors = _apply_effective_ml_features(factors, feature_cols)
+        factors = factors.dropna(subset=feature_cols)
+        if len(factors) == 0:
+            return {
+                "mean_r2": np.nan,
+                "std_r2": np.nan,
+                "mean_ic": np.nan,
+                "std_ic": np.nan,
+                "n_splits": 0,
+            }
+        if len(factors) == 0:
+            logger.warning("No valid training data after effective feature transform")
+            return self
         self.feature_names_ = feature_cols
         
         # Convert date to datetime
@@ -272,6 +318,8 @@ class MLAlphaModel:
             raise ValueError(f"Missing features: {missing}")
         
         # Extract features
+        factors = _apply_effective_ml_features(factors.copy(), feature_cols)
+        factors[feature_cols] = factors[feature_cols].fillna(0.0)
         X = factors[feature_cols].values
         
         # Standardize
@@ -348,6 +396,8 @@ class MLAlphaModel:
             c for c in factors.columns
             if c not in ("date", "ticker", "forward_return")
         ]
+        factors = _apply_effective_ml_features(factors, feature_cols)
+        factors = factors.dropna(subset=feature_cols)
         
         # Ensure date index
         if "date" in factors.columns:

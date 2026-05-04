@@ -396,6 +396,7 @@ def generate_report(
                 add_forward_returns, compute_rank_ic_series, ic_summary,
                 quantile_returns as qr_func,
             )
+            from quant_platform.core.signals.effective import build_effective_signal
             from quant_platform.core.evaluation.plots import plot_ic_series, plot_quantile_returns
 
             prices_copy = prices.copy()
@@ -403,6 +404,11 @@ def generate_report(
             prices_fwd = add_forward_returns(prices_copy, periods=[1])
             merged = factors[["date", "ticker", signal_col]].merge(
                 prices_fwd[["date", "ticker", "fwd_ret_1d"]], on=["date", "ticker"], how="inner",
+            )
+            merged = build_effective_signal(
+                merged,
+                signal_col,
+                direction=_resolve_signal_direction(signal_col),
             )
 
             ric = compute_rank_ic_series(merged, signal_col, "fwd_ret_1d")
@@ -604,3 +610,19 @@ def _load_safe(name: str, *path_parts: str) -> Optional[pd.DataFrame]:
     except Exception as exc:
         logger.warning("Could not load {}: {}", name, exc)
     return None
+
+
+def _resolve_signal_direction(signal_col: Optional[str]) -> int:
+    if not signal_col:
+        return 1
+    try:
+        from quant_platform.core.signals.registry import FactorRegistry
+
+        reg = FactorRegistry()
+        reg.discover()
+        if signal_col in reg:
+            direction = int(reg.get(signal_col).meta.direction)
+            return -1 if direction < 0 else 1
+    except Exception:
+        pass
+    return 1

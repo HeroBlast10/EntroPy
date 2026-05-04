@@ -58,8 +58,15 @@ logger.add(sys.stderr, level="INFO", format=(
               help="Annual borrow rate for short positions.")
 @click.option("--sec-fee-rate", type=float, default=8e-6,
               help="SEC fee rate (sells only).")
+@click.option("--benchmark-market", type=click.Choice(["us", "cn"]), default="us",
+              help="Cached benchmark market to use for alpha/beta analytics.")
+@click.option("--benchmark-path", type=str, default=None,
+              help="Optional explicit benchmark parquet path.")
+@click.option("--risk-free-rate", type=float, default=0.0,
+              help="Annual risk-free rate used in benchmark analytics.")
 def main(weights, capital, slippage_bps, impact_coeff, impact_exponent,
-         commission_per_share, commission_pct, borrow_rate, sec_fee_rate):
+         commission_per_share, commission_pct, borrow_rate, sec_fee_rate,
+         benchmark_market, benchmark_path, risk_free_rate):
     """EntroPy — Run backtest simulation with transaction costs."""
     set_project_root(_project_root)
 
@@ -80,6 +87,9 @@ def main(weights, capital, slippage_bps, impact_coeff, impact_exponent,
         weights_path=weights,
         cost_model=cost_model,
         initial_capital=capital,
+        benchmark_market=benchmark_market,
+        benchmark_path=benchmark_path,
+        risk_free_rate=risk_free_rate,
     )
 
     out = result["output_dir"]
@@ -90,6 +100,8 @@ def main(weights, capital, slippage_bps, impact_coeff, impact_exponent,
     click.echo(f"  daily_pnl.parquet      — {len(result['daily_pnl']):,} days")
     click.echo(f"  cost_attribution.csv")
     click.echo(f"  performance_summary.csv")
+    click.echo(f"  capacity_summary.csv")
+    click.echo(f"  capacity_curve.csv")
     click.echo("")
     click.echo(f"  Gross: {perf.get('gross_ann_return', 0):+.2%} ann  "
                f"Sharpe {perf.get('gross_sharpe', 0):.2f}  "

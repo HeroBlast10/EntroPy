@@ -31,6 +31,26 @@ portfolio:
   max_stock_weight: 0.05
   max_sector_weight: 0.30
 
+multi_factor:
+  method: "rolling_icir"
+  lookback: 126
+  return_col: "fwd_ret_1d"
+
+redundancy:
+  enabled: true
+  min_factors: 3
+  max_factors: 5
+  max_signal_corr: 0.70
+  max_return_corr: 0.70
+  max_exposure_similarity: 0.80
+  min_incremental_sharpe: 0.0
+
+backtest:
+  initial_capital: 1000000
+  benchmark_market: "us"
+  risk_free_rate: 0.0
+  capacity_capitals: [1000000, 5000000, 10000000, 50000000]
+
 costs:
   model: "us_equity"
   slippage_bps: 5.0

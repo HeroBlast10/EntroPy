@@ -13,6 +13,8 @@ import pandas as pd
 from numba import njit
 from loguru import logger
 
+from quant_platform.core.signals.effective import build_effective_signal
+
 
 @njit(cache=True)
 def _rolling_zscore(arr, window):
@@ -71,16 +73,34 @@ class TSForecaster:
         w = np.array(w[:len(available)])
         w = w / w.sum()
         
-        # Cross-sectional z-score each TS feature, then weighted average
+        directions = self._infer_directions(available)
+        # Convert each raw TS feature into the common effective signal scale.
         for fname in available:
-            grp = df.groupby("date")[fname]
-            mu = grp.transform("mean")
-            std = grp.transform("std").replace(0, np.nan)
-            df[f"_z_{fname}"] = (df[fname] - mu) / std
+            eff_col = f"_eff_{fname}"
+            eff = build_effective_signal(
+                df[["date", "ticker", fname]].copy(),
+                fname,
+                output_col=eff_col,
+                direction=directions.get(fname, 1),
+            )
+            df[eff_col] = eff.set_index(["date", "ticker"])[eff_col].reindex(
+                df.set_index(["date", "ticker"]).index
+            ).values
         
-        z_cols = [f"_z_{f}" for f in available]
+        z_cols = [f"_eff_{f}" for f in available]
         df["alpha_ts"] = np.nanmean(df[z_cols].values * w, axis=1)
         return df[["date", "ticker", "alpha_ts"]]
+
+    @staticmethod
+    def _infer_directions(factor_names: List[str]) -> Dict[str, int]:
+        try:
+            from quant_platform.core.signals.registry import FactorRegistry
+
+            reg = FactorRegistry()
+            reg.discover()
+            return {name: reg.get(name).meta.direction for name in factor_names if name in reg}
+        except Exception:
+            return {}
 
 
 class MomentumZScoreSignal:

@@ -77,13 +77,24 @@ def generate_trades(
     trades["side"] = np.where(trades["delta_weight"] > 0, "buy", "sell")
     trades["notional_trade"] = (trades["delta_weight"].abs() * capital)
     trades["price"] = prices_today.reindex(trades["ticker"], fill_value=np.nan).values
+    trades["price"] = trades["price"].replace([np.inf, -np.inf], np.nan)
     trades["shares"] = np.where(
         trades["price"] > 0,
         (trades["notional_trade"] / trades["price"]).round(0),
         0.0,
     )
-    trades["adv_shares"] = adv_today.reindex(trades["ticker"], fill_value=1e6).values
-    trades["daily_vol"] = vol_today.reindex(trades["ticker"], fill_value=0.02).values
+    trades["adv_shares"] = (
+        adv_today.reindex(trades["ticker"], fill_value=1e6)
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(1e6)
+        .values
+    )
+    trades["daily_vol"] = (
+        vol_today.reindex(trades["ticker"], fill_value=0.02)
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.02)
+        .values
+    )
 
     return trades.reset_index(drop=True)
 
@@ -135,6 +146,7 @@ def simulate_execution(
     prices_sorted["adv_shares"] = adv
 
     ret = prices_sorted.groupby("ticker")["adj_close"].transform(lambda s: s.pct_change())
+    prices_sorted["stock_ret"] = ret
     daily_vol = ret.groupby(prices_sorted["ticker"]).transform(
         lambda s: s.rolling(vol_lookback, min_periods=5).std()
     )
@@ -162,6 +174,11 @@ def simulate_execution(
         adv_series = px_today["adv_shares"] if "adv_shares" in px_today.columns else pd.Series(dtype=float)
         vol_series = px_today["daily_vol"] if "daily_vol" in px_today.columns else pd.Series(dtype=float)
 
+        if prev_weights is not None and "stock_ret" in px_today.columns:
+            day_ret = px_today["stock_ret"].reindex(prev_weights.index).fillna(0.0)
+            portfolio_ret = float((prev_weights * day_ret).sum())
+            capital *= (1.0 + portfolio_ret)
+
         trades = generate_trades(
             weights_today=w_today,
             weights_yesterday=prev_weights,
@@ -174,9 +191,10 @@ def simulate_execution(
         if not trades.empty:
             trades_with_costs = estimate_batch_costs(trades, cost_model)
             trades_with_costs.insert(0, "date", dt)
+            trades_with_costs["portfolio_value_before_trade"] = capital
             all_trades.append(trades_with_costs)
 
-            # Update capital by subtracting trading costs
+            # Update capital by subtracting trading costs after mark-to-market PnL.
             total_cost = trades_with_costs["total_cost"].sum()
             capital -= total_cost
 

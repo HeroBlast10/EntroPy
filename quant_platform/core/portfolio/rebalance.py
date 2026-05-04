@@ -145,6 +145,7 @@ def validate_portfolio_weights(
     weights: pd.DataFrame,
     mode: str = "long_only",
     tolerance: float = 1e-6,
+    allow_cash: bool = False,
 ) -> None:
     """Validate portfolio weights satisfy invariants.
     
@@ -171,8 +172,14 @@ def validate_portfolio_weights(
         weight_sum = group["weight"].sum()
         
         if mode == "long_only":
-            # Check sum = 1
-            if abs(weight_sum - 1.0) > tolerance:
+            # Check sum = 1 by default.  Regime overlays may intentionally
+            # hold cash, in which case long-only gross exposure may be <= 1.
+            invalid_sum = (
+                weight_sum < -tolerance or weight_sum > 1.0 + tolerance
+                if allow_cash
+                else abs(weight_sum - 1.0) > tolerance
+            )
+            if invalid_sum:
                 logger.error(
                     "Long-only weights sum to %.4f (not 1.0) on %s. Tickers: %s",
                     weight_sum,
@@ -180,7 +187,7 @@ def validate_portfolio_weights(
                     group[["ticker", "weight"]].to_dict("records"),
                 )
                 raise ValueError(
-                    f"Long-only weights sum to {weight_sum:.4f} (not 1.0) on {date}"
+                    f"Long-only weights sum to {weight_sum:.4f} on {date}"
                 )
             
             # Check no negative weights
