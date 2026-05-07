@@ -6,11 +6,12 @@
 
 EntroPy tests whether state-space, regime, entropy, mean-reversion, and classic cross-sectional factors can produce robust, cost-aware, capacity-aware equity alpha under point-in-time data discipline and rolling out-of-sample validation.
 
-[中文说明](README.zh-CN.md) | [Upgrade Notes](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md)
+[中文说明](README.zh-CN.md) | [Upgrade Notes](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md) | [Factor Dictionary](docs/factor_dictionary_beginner.md)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-172%20passed-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-202%20passed-brightgreen.svg)](#testing)
+[![Factors](https://img.shields.io/badge/factors-42%20registered-orange.svg)](#signal-library)
 
 </div>
 
@@ -22,16 +23,20 @@ EntroPy is built around one practical quant research question:
 
 > Can advanced signal-processing features add incremental, tradable alpha after realistic costs, factor redundancy, multiple testing, benchmark risk, and capacity constraints?
 
-The platform is designed to move beyond "best-looking factor backtests" and toward a production-style research workflow:
+The platform moves beyond "best-looking backtests" toward a production research workflow with rigorous gatekeeping at every stage:
 
 - Correct signal direction and standardized effective signals.
-- Multi-horizon single-factor validation.
-- Multiple-testing controls to reduce data snooping.
-- Redundancy pruning to keep 3-5 complementary factors instead of many duplicates.
-- Comparable multi-factor combiners instead of static equal-weight z-score averaging.
-- Regime-aware factor allocation and exposure control.
+- **Newey-West HAC IC t-stat** to correct for autocorrelation from overlapping forward returns.
+- **Alpha decay half-life estimation** to drive rebalance frequency decisions.
+- **Long/short leg attribution** to assess long-only deployability.
+- **Cross-sectional stability** across size/liquidity buckets.
+- Multi-horizon single-factor validation with multiple-testing controls (FDR, Hansen SPA, CSCV).
+- **Hierarchical clustering** redundancy pruning (keeps 3-5 complementary factors).
+- Comparable multi-factor combiners with regime-aware weighting.
 - Factor-risk-model-based portfolio optimization.
-- Benchmark-relative performance, transaction cost simulation, and capacity curves.
+- **Production Readiness Score (PRS)** — 7-dimensional 0-100 score with ACCEPT/CONDITIONAL/REJECT verdict.
+- **Factor Discovery Tearsheet** — self-contained HTML per factor with all key charts.
+- **Multi-Factor Decision Story** — end-to-end narrative HTML report.
 - YAML-driven experiment orchestration for reproducible research.
 
 ## Core Capabilities
@@ -39,24 +44,28 @@ The platform is designed to move beyond "best-looking factor backtests" and towa
 | Area | Capabilities |
 | --- | --- |
 | Data layer | US/CN market calendar support, dynamic universe filters, point-in-time price and fundamental alignment, benchmark loading |
-| Signal library | Cross-sectional, time-series, regime, and relative-value factors |
+| Signal library | 42 registered cross-sectional, time-series, regime, and relative-value factors |
 | Effective signal | `direction -> winsorize -> neutralize -> z-score -> rank` shared by evaluation, portfolio, ML, and reporting |
-| Single-factor research | 1/5/10/20d IC and RankIC, IC decay, quantile monotonicity, turnover, break-even cost, capacity, regime/subperiod/OOS stability |
-| Multiple testing | Benjamini-Hochberg FDR, Bonferroni, White Reality Check approximation, Deflated Sharpe approximation |
-| Redundancy pruning | Factor signal correlation, factor return correlation, exposure-vector similarity, cluster diagnostics, stepwise incremental alpha check |
+| Single-factor research | 1/5/10/20d IC and RankIC, **NW HAC t-stat**, IC decay + **half-life**, quintile monotonicity, turnover, break-even cost, **long/short leg attribution**, **cross-section stability**, capacity, OOS stability |
+| Multiple testing | Benjamini-Hochberg FDR, Bonferroni, **Hansen SPA test** (superior to White RC), Deflated Sharpe, **full combinatorial CSCV** |
+| Redundancy pruning | Factor signal correlation, return correlation, exposure similarity, **hierarchical cluster selection**, stepwise incremental alpha check |
 | Multi-factor alpha | Rolling ICIR weighting, factor-return mean-variance, factor-return risk parity, baseline-orthogonal incremental alpha |
 | Regime integration | Regime-driven factor weights, category enable/disable, net exposure, rebalance threshold, alpha scaling |
 | Portfolio construction | Quantile portfolios, optimized portfolios, equal/market-cap/signal/inverse-vol weighting, sector/stock/turnover constraints |
 | Risk model | Barra-style factor risk model with exposures, factor covariance, specific risk, and decomposition |
 | Execution and costs | Dynamic-NAV trade sizing, slippage, impact, commissions, borrow cost, cost attribution |
 | Backtest analytics | Net/gross NAV, drawdown, VaR/CVaR, benchmark alpha/beta/IR, capacity and capital scaling curves |
+| **Production Readiness** | **7-dim PRS (0-100), Factor Discovery Tearsheet (HTML), Decision Story Report (HTML)** |
 | Experiments | YAML configs for factor sets, combiners, costs, walk-forward, benchmark, and capacity settings |
 
-## Signal Library
+## Signal Library (42 Registered Factors)
 
 | Signal Type | Examples | Primary Use |
 | --- | --- | --- |
-| Cross-sectional | `MOM_12_1M`, `STR_1M`, `VOL_20D`, `ILLIQ_AMIHUD`, `BOOK_TO_MARKET`, `ROE`, `ASSET_GROWTH` | Stock ranking and portfolio construction |
+| Momentum | `MOM_12_1M`, `STR_1M`, `MOM_PATH`, **`RESID_MOM_12_1M`**, **`OVERNIGHT_RET_21D`** | Trend, reversal, and microstructure signals |
+| Volatility | `VOL_20D`, `IDIOVOL`, `TAIL_RISK`, `REALIZED_JUMP`, `VOL_OF_VOL` | Risk and tail-risk cross-section |
+| Liquidity | `ILLIQ_AMIHUD`, `SPREAD_HL`, `PRICE_IMPACT`, `ABNORMAL_VOLUME` | Liquidity premium and market impact |
+| Value / Quality | `BOOK_TO_MARKET`, `EARNINGS_YIELD`, `GROSS_PROFITABILITY`, `ASSET_GROWTH`, **`ACCRUALS`**, **`PIOTROSKI_F8`** | Fundamental screening |
 | Time-series | `KF_VELOCITY`, `KF_TREND_STRENGTH`, `SPECTRAL_ENTROPY_60D`, `HURST_60D`, rolling skew/kurtosis | Per-asset latent state and trend/noise features |
 | Regime | `HMM_TURBULENCE_PROB` | Market-state-aware factor allocation and exposure control |
 | Relative value | `OU_ZSCORE` | Mean-reversion quality and spread-style diagnostics |
@@ -207,20 +216,28 @@ quant_platform/
 ├── core/
 │   ├── data/                  # PIT data, calendars, universe, benchmark, sector map
 │   ├── signals/               # Factor base, registry, effective signal, selection, redundancy
-│   │   ├── cross_sectional/    # Momentum, volatility, liquidity, value/quality factors
+│   │   ├── cross_sectional/    # 32 CS factors: momentum, volatility, liquidity, value/quality
+│   │   │   evaluation.py       # ★ NW HAC IC, alpha half-life, long/short attribution, stability
 │   │   ├── time_series/        # Kalman, entropy, Hurst, higher moments
 │   │   ├── regime/             # HMM turbulence probability
 │   │   ├── relative_value/     # OU mean-reversion features
 │   │   └── evaluation/         # Type-specific evaluation scorecards
+│   │   factor_selection.py     # ★ Hansen SPA test, FDR, deployability filters
+│   │   redundancy.py           # ★ Hierarchical cluster-based factor selection
 │   ├── alpha_models/           # Ranker, ML alpha, regime overlay, multi-factor combiner
 │   ├── portfolio/              # Quantile, optimizer, constraints, risk model, pipeline
 │   ├── execution/              # Cost models, vectorized backtest, PnL
-│   ├── evaluation/             # Walk-forward, ablation, benchmark, capacity, reports
+│   ├── evaluation/             # Walk-forward, ablation, benchmark, capacity
+│   │   overfit.py              # ★ Full combinatorial CSCV (Bailey et al. 2017)
+│   │   production_readiness.py # ★ 7-dim Production Readiness Score (PRS)
+│   │   tearsheet.py            # ★ Factor Discovery Tearsheet (HTML)
+│   │   report_story.py         # ★ Multi-Factor Decision Story Report (HTML)
 │   └── experiments/            # YAML experiment runner
 ├── experiments/                # Experiment YAML configs
+├── notebooks/                  # ★ factor_research_walkthrough.ipynb (end-to-end demo)
 ├── scripts/                    # CLI entry points
-├── tests/                      # Unit and regression tests
-└── docs/                       # Design and upgrade documentation
+├── tests/                      # 202 unit and regression tests
+└── docs/                       # Design docs + Factor Dictionary for Beginners
 ```
 
 ## Key Commands
@@ -236,6 +253,24 @@ quant_platform/
 | `python scripts/run_experiment.py` | Run YAML-defined experiment |
 | `python scripts/tune_factors.py` | Run factor parameter tuning |
 
+## Jupyter Notebook Walkthrough
+
+An end-to-end interactive demo is available in `notebooks/factor_research_walkthrough.ipynb`:
+
+1. Build synthetic price panel (or swap in real data)
+2. Compute 8 representative factors via the registry
+3. Single-factor tearsheets with NW HAC t-stat, half-life, leg attribution
+4. Multiple-testing controls (FDR, Hansen SPA, full CSCV)
+5. Hierarchical clustering redundancy pruning
+6. Multi-factor combiner comparison (4 methods, OOS Sharpe)
+7. Production Readiness Score for every factor
+8. Generate HTML tearsheets and Decision Story report
+
+```bash
+cd notebooks
+jupyter notebook factor_research_walkthrough.ipynb
+```
+
 ## Testing
 
 ```bash
@@ -246,7 +281,7 @@ pytest -q
 Latest verified result:
 
 ```text
-172 passed
+202 passed   # 172 original + 30 new tests for upgrades
 ```
 
 ## Known Limitations
@@ -261,6 +296,7 @@ Latest verified result:
 ## Documentation
 
 - [Production Factor Research Upgrade](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md)
+- [Factor Dictionary for Beginners](docs/factor_dictionary_beginner.md) ← **New** — explains every factor intuitively
 - [Data Dictionary](docs/data_dictionary.md)
 - [Factor Dictionary](docs/factor_dictionary.md)
 - [Portfolio Dictionary](docs/portfolio_dictionary.md)

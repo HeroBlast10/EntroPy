@@ -49,6 +49,7 @@ venv/
 .venv/
 
 # Implementation notes / interview prep docs (not for public repo)
+local_docs/
 ACCURACY_FIXES_SUMMARY.md
 BENCHMARK_IMPLEMENTATION.md
 BUGFIX_SUMMARY.md

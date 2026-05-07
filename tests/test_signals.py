@@ -143,8 +143,9 @@ class TestRegistry:
         from quant_platform.core.signals.registry import FactorRegistry
         reg = FactorRegistry()
         reg.discover()
-        # Should have at least: 24 CS + 3 Kalman + 2 entropy/hurst + 3 moments + 1 HMM + 1 OU = 34
-        assert len(reg) >= 34
+        # Baseline 34 + 4 new production factors (residual mom, overnight,
+        # accruals, Piotroski) = 38 lower bound.
+        assert len(reg) >= 38
 
     def test_filter_by_signal_type(self):
         from quant_platform.core.signals.registry import FactorRegistry
@@ -158,7 +159,8 @@ class TestRegistry:
         reg = FactorRegistry()
         reg.discover()
         mom = reg.list_factors(category="momentum")
-        assert len(mom) == 7
+        # 7 vanilla momentum factors + 1 ResidualMomentum (Blitz-Huij-Martens)
+        assert len(mom) == 8
 
 
 class TestAlphaModels:
