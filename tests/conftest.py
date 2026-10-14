@@ -40,6 +40,7 @@ def sample_prices() -> pd.DataFrame:
                 "close": c,
                 "volume": int(np.random.uniform(1e6, 1e7)),
                 "amount": c * np.random.uniform(1e6, 1e7),
+                "split_factor": 1.0,
                 "adj_factor": 1.0,
                 "adj_close": c,
                 "is_tradable": True,

@@ -112,6 +112,23 @@ class TestVolatilityFactors:
         assert result.notna().sum() > 0
 
 
+class TestMomentumFactors:
+    def test_mom_12_1m_uses_classic_12_minus_1_window(self):
+        from quant_platform.core.signals.cross_sectional.momentum import Mom12_1M
+
+        dates = pd.bdate_range("2023-01-02", periods=274)
+        prices = pd.DataFrame({
+            "date": dates,
+            "ticker": "A",
+            "adj_close": np.arange(1.0, 275.0),
+        })
+        result = Mom12_1M().compute(prices, zscore=False)
+        observed = result.loc[result["date"] == dates[252], "MOM_12_1M"].iloc[0]
+        expected = prices.loc[231, "adj_close"] / prices.loc[0, "adj_close"] - 1.0
+
+        assert observed == pytest.approx(expected)
+
+
 class TestHMMRegime:
     def test_regime_returns_series(self):
         from quant_platform.core.signals.regime.hmm_regime import HMMTurbulenceProbability

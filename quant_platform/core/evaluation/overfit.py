@@ -57,8 +57,10 @@ def deflated_sharpe_ratio(
 
 
 def _annualised_sharpe(returns: np.ndarray, ann: int = 252) -> float:
+    returns = np.asarray(returns, dtype=float)
+    returns = returns[np.isfinite(returns)]
     if returns.size < 2:
-        return 0.0
+        return np.nan
     mu = float(np.mean(returns))
     sd = float(np.std(returns, ddof=1))
     if sd <= 0:
@@ -155,6 +157,7 @@ def probability_of_backtest_overfitting(
 
     logits: List[float] = []
     is_better_than_median = 0
+    n_evaluated = 0
     for is_idx in combo_iter:
         oos_idx = tuple(i for i in range(n_splits) if i not in is_idx)
         is_data = np.concatenate([blocks[i] for i in is_idx], axis=0)
@@ -163,15 +166,26 @@ def probability_of_backtest_overfitting(
         is_sharpes = np.array([_annualised_sharpe(is_data[:, j], annualisation) for j in range(n_var)])
         oos_sharpes = np.array([_annualised_sharpe(oos_data[:, j], annualisation) for j in range(n_var)])
 
-        best = int(np.argmax(is_sharpes))
+        if not np.isfinite(is_sharpes).any():
+            continue
+        best = int(np.nanargmax(is_sharpes))
+        valid_oos = np.isfinite(oos_sharpes)
+        if not valid_oos[best] or valid_oos.sum() < 2:
+            continue
         # OOS relative rank of the IS-best variant: r* in {1..N}, ascending order
-        oos_rank = float((oos_sharpes < oos_sharpes[best]).sum() + 0.5 * (oos_sharpes == oos_sharpes[best]).sum())
-        omega = oos_rank / (n_var + 1.0)  # in (0, 1)
+        comparable = oos_sharpes[valid_oos]
+        n_comparable = len(comparable)
+        less = float((comparable < oos_sharpes[best]).sum())
+        equal = float((comparable == oos_sharpes[best]).sum())
+        # Fractional rank in [1, N], including the selected observation itself.
+        oos_rank = less + (equal + 1.0) / 2.0
+        omega = oos_rank / (n_comparable + 1.0)  # in (0, 1)
         omega = min(max(omega, 1e-6), 1.0 - 1e-6)
         logits.append(math.log(omega / (1.0 - omega)))
 
-        if oos_sharpes[best] > np.median(oos_sharpes):
+        if oos_sharpes[best] > np.median(comparable):
             is_better_than_median += 1
+        n_evaluated += 1
 
     # PBO = fraction of logits <= 0  (i.e. omega <= 0.5)
     logits_arr = np.asarray(logits, dtype=float)
@@ -179,14 +193,18 @@ def probability_of_backtest_overfitting(
 
     out: Dict[str, object] = {
         "pbo": pbo,
-        "n_combinations": int(n_used),
+        "n_combinations": int(n_evaluated),
         "n_combinations_total": int(total_combos),
         "n_variants": int(n_var),
         "n_splits": int(n_splits),
         "block_size": int(block_size),
         "mean_logit": float(np.mean(logits_arr)) if logits_arr.size else np.nan,
         "median_logit": float(np.median(logits_arr)) if logits_arr.size else np.nan,
-        "stochastic_dominance": float(is_better_than_median / n_used) if n_used else np.nan,
+        "stochastic_dominance": (
+            float(is_better_than_median / n_evaluated)
+            if n_evaluated
+            else np.nan
+        ),
     }
     if return_logits:
         out["logits"] = logits

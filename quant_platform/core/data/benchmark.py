@@ -67,7 +67,11 @@ def fetch_benchmark(
     
     # Fetch from yfinance
     try:
-        data = yf.download(ticker, start=start, end=end, progress=False)
+        # Be explicit because yfinance changed the auto_adjust default in 0.2.x.
+        # We want the vendor-provided adjusted-close series when it is available.
+        data = yf.download(
+            ticker, start=start, end=end, progress=False, auto_adjust=False,
+        )
     except Exception as exc:
         logger.error("Failed to fetch benchmark {}: {}", ticker, exc)
         return pd.DataFrame(columns=["date", "ticker", "adj_close", "return"])
@@ -77,10 +81,17 @@ def fetch_benchmark(
         return pd.DataFrame(columns=["date", "ticker", "adj_close", "return"])
     
     # Normalize to our schema
+    price_key = "Adj Close" if "Adj Close" in data.columns else "Close"
+    adjusted = data[price_key]
+    # Recent yfinance versions return a one-column DataFrame (MultiIndex
+    # columns) even for a single ticker; older versions returned a Series.
+    if isinstance(adjusted, pd.DataFrame):
+        adjusted = adjusted.iloc[:, 0]
+
     df = pd.DataFrame({
         "date": data.index,
         "ticker": ticker,
-        "adj_close": data["Adj Close"].values,
+        "adj_close": adjusted.to_numpy(),
     })
     
     df["date"] = pd.to_datetime(df["date"])
@@ -116,7 +127,14 @@ def build_benchmark(
         return None
     
     # Align to trading calendar
-    df = align_to_calendar(df, date_col="date")
+    exchange = "XSHG" if market == "cn" else "XNYS"
+    df = align_to_calendar(
+        df,
+        date_col="date",
+        start=start,
+        end=end,
+        exchange=exchange,
+    )
     
     # Save
     if output_path is None:

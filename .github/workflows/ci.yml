@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install tested dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-ci-lock.txt
+
+      - name: Compile source
+        run: python -m compileall -q quant_platform scripts tests
+
+      - name: Run tests
+        run: pytest -q --basetemp=.pytest_tmp

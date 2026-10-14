@@ -54,6 +54,20 @@ class BacktestConfig:
     # --- Capital ---
     initial_capital: float = 1e6
 
+    def __post_init__(self) -> None:
+        if self.rebalance_freq not in {"D", "W", "M"}:
+            raise ValueError("rebalance_freq must be D, W, or M")
+        if self.signal_lag < 0:
+            raise ValueError("signal_lag cannot be negative")
+        if self.top_n <= 0:
+            raise ValueError("top_n must be positive")
+        if not 0 < self.max_weight <= 1:
+            raise ValueError("max_weight must be in (0, 1]")
+        if self.lot_size <= 0:
+            raise ValueError("lot_size must be positive")
+        if self.initial_capital <= 0:
+            raise ValueError("initial_capital must be positive")
+
 
 @dataclass
 class BacktestResult:
@@ -100,14 +114,32 @@ class VectorizedBacktest:
         universe : optional tradable universe [date, ticker, pass_all_filters].
         """
         ticker_col = "ticker" if "ticker" in panel.columns else "ts_code"
-        close_mat, ret_mat, signal_mat, tradable_mat, dates, tickers = self._build_matrices(
+        (
+            close_mat,
+            ret_mat,
+            signal_mat,
+            eligible_mat,
+            buyable_mat,
+            sellable_mat,
+            dates,
+            tickers,
+        ) = self._build_matrices(
             panel, prices, ticker_col, universe
         )
         reb_dates = self._rebalance_schedule(dates)
-        weights_mat = self._signal_to_weights(signal_mat, tradable_mat, dates, reb_dates, tickers)
+        weights_mat = self._signal_to_weights(
+            signal_mat, eligible_mat, dates, reb_dates, tickers
+        )
         weights_mat = self._cap_weights(weights_mat)
-        nav, daily_ret, turnover, cost_bps = self._simulate(
-            close_mat, ret_mat, weights_mat, dates, tickers,
+        nav, daily_ret, turnover, cost_bps, actual_weights = self._simulate(
+            close_mat,
+            ret_mat,
+            weights_mat,
+            buyable_mat,
+            sellable_mat,
+            reb_dates,
+            dates,
+            tickers,
         )
         sharpe = float(daily_ret.mean() / daily_ret.std() * np.sqrt(252)) if daily_ret.std() > 0 else 0.0
         ann_ret = float((1 + daily_ret).prod() ** (252 / len(daily_ret)) - 1) if len(daily_ret) > 0 else 0.0
@@ -117,7 +149,7 @@ class VectorizedBacktest:
         max_dd = float(dd.min()) if len(dd) > 0 else 0.0
 
         weights_df = pd.DataFrame(
-            weights_mat, index=dates, columns=tickers,
+            actual_weights, index=dates, columns=tickers,
         ).stack().reset_index()
         weights_df.columns = ["date", ticker_col, "weight"]
         weights_df = weights_df[weights_df["weight"].abs() > 1e-10]
@@ -152,75 +184,109 @@ class VectorizedBacktest:
         price_ticker = "ticker" if "ticker" in prices.columns else "ts_code"
 
         # Pivot close
-        close_col = "adj_close" if "adj_close" in prices.columns else "close"
+        # Raw close is required for share/lot sizing.  Adjusted close is used
+        # only for total-return marking.
+        close_col = "close" if "close" in prices.columns else "adj_close"
         close_wide = prices.pivot_table(
             index="date", columns=price_ticker, values=close_col, aggfunc="last"
         )
         dates = close_wide.index
         tickers = close_wide.columns.tolist()
 
-        # Returns
-        ret_wide = close_wide.pct_change()
+        return_col = "adj_close" if "adj_close" in prices.columns else close_col
+        return_wide = prices.pivot_table(
+            index="date", columns=price_ticker, values=return_col, aggfunc="last"
+        ).reindex(index=dates, columns=tickers)
+        ret_wide = return_wide.pct_change()
         ret_mat = ret_wide.values
         close_mat = close_wide.values
 
-        # Signal: detect first non-date/ticker column
-        sig_col = None
-        for c in panel.columns:
-            if c not in ("date", ticker_col):
-                sig_col = c
-                break
-        if sig_col is None:
-            raise ValueError("Panel has no signal column")
+        # Prefer the canonical signal column and never mistake an execution
+        # status flag for alpha merely because of input column order.
+        status_columns = {
+            "limit_up",
+            "limit_down",
+            "is_st",
+            "is_suspended",
+            "is_new_listing",
+            "pass_all_filters",
+        }
+        candidates = [
+            c
+            for c in panel.columns
+            if c not in {"date", ticker_col, *status_columns}
+        ]
+        if "signal" in candidates:
+            sig_col = "signal"
+        elif len(candidates) == 1:
+            sig_col = candidates[0]
+        else:
+            raise ValueError(
+                "Panel must contain a 'signal' column or exactly one alpha "
+                f"column; found {candidates}"
+            )
         signal_wide = panel.pivot_table(
             index="date", columns=ticker_col, values=sig_col, aggfunc="last"
         )
         signal_wide = signal_wide.reindex(index=dates, columns=tickers)
         signal_mat = signal_wide.values
 
-        # Tradable mask: apply A-share constraints
-        tradable_mat = np.ones_like(signal_mat, dtype=bool)
-        tradable_mat = tradable_mat & ~np.isnan(close_mat) & (close_mat > 0)
-        tradable_mat = tradable_mat & ~np.isnan(signal_mat)
+        # Eligibility filters block both directions.  Price limits are applied
+        # later by order direction: limit-up blocks buys only, limit-down sells.
+        eligible_mat = np.ones_like(signal_mat, dtype=bool)
+        eligible_mat &= ~np.isnan(close_mat) & (close_mat > 0)
+        limit_up_mat = np.zeros_like(signal_mat, dtype=bool)
+        limit_down_mat = np.zeros_like(signal_mat, dtype=bool)
 
         if "limit_up" in panel.columns:
             limit_up_wide = panel.pivot_table(
                 index="date", columns=ticker_col, values="limit_up", aggfunc="last"
             ).reindex(index=dates, columns=tickers)
             if self.config.skip_limit_up:
-                tradable_mat = tradable_mat & ~(limit_up_wide.fillna(False).values)
+                limit_up_mat = limit_up_wide.fillna(False).values.astype(bool)
         if "limit_down" in panel.columns:
             limit_down_wide = panel.pivot_table(
                 index="date", columns=ticker_col, values="limit_down", aggfunc="last"
             ).reindex(index=dates, columns=tickers)
             if self.config.skip_limit_down:
-                tradable_mat = tradable_mat & ~(limit_down_wide.fillna(False).values)
+                limit_down_mat = limit_down_wide.fillna(False).values.astype(bool)
         if "is_st" in panel.columns:
             is_st_wide = panel.pivot_table(
                 index="date", columns=ticker_col, values="is_st", aggfunc="last"
             ).reindex(index=dates, columns=tickers)
             if self.config.skip_st:
-                tradable_mat = tradable_mat & ~(is_st_wide.fillna(False).values)
+                eligible_mat &= ~is_st_wide.fillna(False).values.astype(bool)
         if "is_suspended" in panel.columns:
             susp_wide = panel.pivot_table(
                 index="date", columns=ticker_col, values="is_suspended", aggfunc="last"
             ).reindex(index=dates, columns=tickers)
             if self.config.skip_suspended:
-                tradable_mat = tradable_mat & ~(susp_wide.fillna(True).values)
+                eligible_mat &= ~susp_wide.fillna(True).values.astype(bool)
         if "is_new_listing" in panel.columns:
             new_wide = panel.pivot_table(
                 index="date", columns=ticker_col, values="is_new_listing", aggfunc="last"
             ).reindex(index=dates, columns=tickers)
             if self.config.skip_new_listing:
-                tradable_mat = tradable_mat & ~(new_wide.fillna(False).values)
+                eligible_mat &= ~new_wide.fillna(False).values.astype(bool)
 
         if universe is not None:
             uni_wide = universe.pivot_table(
                 index="date", columns="ticker", values="pass_all_filters", aggfunc="last"
             ).reindex(index=dates, columns=tickers)
-            tradable_mat = tradable_mat & uni_wide.fillna(False).values
+            eligible_mat &= uni_wide.fillna(False).values.astype(bool)
 
-        return close_mat, ret_mat, signal_mat, tradable_mat, dates, tickers
+        buyable_mat = eligible_mat & ~limit_up_mat
+        sellable_mat = eligible_mat & ~limit_down_mat
+        return (
+            close_mat,
+            ret_mat,
+            signal_mat,
+            eligible_mat,
+            buyable_mat,
+            sellable_mat,
+            dates,
+            tickers,
+        )
 
     def _rebalance_schedule(self, dates: pd.DatetimeIndex) -> np.ndarray:
         """Boolean mask of rebalance dates."""
@@ -235,8 +301,8 @@ class VectorizedBacktest:
         elif freq == "M":
             df["key"] = df["date"].dt.to_period("M")
             last = df.groupby("key")["date"].transform("max")
-        else:
-            return np.ones(len(dates), dtype=bool)
+        else:  # guarded by BacktestConfig.__post_init__
+            raise ValueError(f"Unknown rebalance frequency: {freq}")
         return (df["date"] == last).values
 
     def _signal_to_weights(
@@ -268,7 +334,8 @@ class VectorizedBacktest:
             top_n = self.config.top_n
 
             if scheme == WeightScheme.TOP_N:
-                rank = np.argsort(-sig_valid)
+                valid_idx = np.flatnonzero(valid)
+                rank = valid_idx[np.argsort(-sig_t[valid_idx])]
                 n_pick = min(top_n, int(valid.sum()))
                 w = np.zeros(N)
                 for i in range(n_pick):
@@ -284,17 +351,13 @@ class VectorizedBacktest:
                 weights[t] = w
 
             elif scheme == WeightScheme.LONG_SHORT:
-                rank = np.argsort(-sig_valid)
+                valid_idx = np.flatnonzero(valid)
+                ordered = valid_idx[np.argsort(sig_t[valid_idx])]
                 n_pick = min(top_n, int(valid.sum()) // 2)
                 w = np.zeros(N)
-                for i in range(n_pick):
-                    idx = rank[i]
-                    if valid[idx]:
-                        w[idx] = 1.0 / n_pick
-                for i in range(N - n_pick, N):
-                    idx = rank[i]
-                    if valid[idx]:
-                        w[idx] = -1.0 / n_pick
+                if n_pick > 0:
+                    w[ordered[-n_pick:]] = 1.0 / n_pick
+                    w[ordered[:n_pick]] = -1.0 / n_pick
                 weights[t] = w
             else:
                 weights[t] = weights[t - 1] if t > 0 else np.zeros(N)
@@ -306,45 +369,131 @@ class VectorizedBacktest:
         return weights
 
     def _cap_weights(self, weights: np.ndarray) -> np.ndarray:
-        """Cap individual weights at max_weight."""
+        """Cap positions while preserving each sleeve's intended notional."""
         max_w = self.config.max_weight
-        return np.clip(weights, -max_w, max_w)
+        capped = np.zeros_like(weights, dtype=float)
+        for row_idx, row in enumerate(weights):
+            positive = row > 0
+            negative = row < 0
+            if positive.any():
+                capped[row_idx, positive] = self._cap_sleeve(
+                    row[positive], max_w, float(row[positive].sum())
+                )
+            if negative.any():
+                capped[row_idx, negative] = -self._cap_sleeve(
+                    -row[negative], max_w, float(-row[negative].sum())
+                )
+        return capped
+
+    @staticmethod
+    def _cap_sleeve(values: np.ndarray, cap: float, target_sum: float) -> np.ndarray:
+        if len(values) * cap < target_sum - 1e-12:
+            raise ValueError(
+                "max_weight is infeasible for the number of selected names"
+            )
+        result = np.zeros(len(values), dtype=float)
+        remaining = target_sum
+        active = np.ones(len(values), dtype=bool)
+        scores = np.maximum(np.asarray(values, dtype=float), 0.0)
+        while remaining > 1e-12 and active.any():
+            idx = np.flatnonzero(active)
+            active_scores = scores[idx]
+            proposal = (
+                np.full(len(idx), remaining / len(idx))
+                if active_scores.sum() <= 0
+                else remaining * active_scores / active_scores.sum()
+            )
+            room = cap - result[idx]
+            hit = proposal >= room - 1e-12
+            if not hit.any():
+                result[idx] += proposal
+                break
+            result[idx[hit]] += room[hit]
+            remaining -= float(room[hit].sum())
+            active[idx[hit]] = False
+        return result
 
     def _simulate(
         self,
         close_mat: np.ndarray,
         ret_mat: np.ndarray,
         weights_mat: np.ndarray,
+        buyable_mat: np.ndarray,
+        sellable_mat: np.ndarray,
+        rebalance_mask: np.ndarray,
         dates: pd.DatetimeIndex,
         tickers: list,
     ):
         """Simulate NAV with costs. Enforce lot size on trades."""
         T, N = close_mat.shape
-        lot = self.config.lot_size
-        nav = np.ones(T + 1) * self.config.initial_capital
+        lot = max(int(self.config.lot_size), 1)
+        nav_values = np.zeros(T, dtype=float)
+        actual_weights = np.zeros((T, N), dtype=float)
+        turnover_values = np.zeros(T, dtype=float)
+        position_values = np.zeros(N, dtype=float)
+        pending = np.zeros(N, dtype=bool)
+        previous_nav = float(self.config.initial_capital)
         total_cost_bps = 0.0
 
-        for t in range(1, T):
-            g_ret = np.nansum(weights_mat[t - 1] * np.nan_to_num(ret_mat[t], 0))
-            nav_before_cost = nav[t - 1] * (1 + g_ret)
-            nav[t] = nav_before_cost
+        for t in range(T):
+            close_today = close_mat[t]
+            day_return = np.nan_to_num(ret_mat[t], nan=0.0)
+            pnl = float(np.sum(position_values * day_return))
+            position_values = position_values * (1.0 + day_return)
+            nav_before_cost = previous_nav + pnl
+            if nav_before_cost <= 0:
+                raise RuntimeError(f"NAV became non-positive on {dates[t]}")
 
-            # Turnover and cost (cost as fraction of NAV)
-            delta = np.abs(weights_mat[t] - weights_mat[t - 1])
-            turnover_t = np.nansum(delta)
+            weights_before = position_values / nav_before_cost
+            desired_values = weights_mat[t] * nav_before_cost
+            desired_shares = np.zeros(N, dtype=float)
+            valid_price = np.isfinite(close_today) & (close_today > 0)
+            desired_shares[valid_price] = (
+                np.sign(desired_values[valid_price])
+                * np.floor(
+                    np.abs(desired_values[valid_price])
+                    / close_today[valid_price]
+                    / lot
+                )
+                * lot
+            )
+            rounded_values = desired_shares * np.where(valid_price, close_today, 0.0)
+            direction = desired_values - position_values
+            direction_ok = (
+                ((direction > 1e-10) & buyable_mat[t])
+                | ((direction < -1e-10) & sellable_mat[t])
+            )
+            if rebalance_mask[t]:
+                attempted = valid_price & direction_ok
+                needs_trade = np.abs(direction) > 1e-10
+                pending = needs_trade & ~attempted
+            else:
+                attempted = pending & valid_price & direction_ok
+                pending[attempted] = False
+
+            executed_values = position_values.copy()
+            executed_values[attempted] = rounded_values[attempted]
+            weights_after = executed_values / nav_before_cost
+            turnover_t = float(np.abs(weights_after - weights_before).sum())
+            cost_frac = 0.0
             if turnover_t > 1e-10:
                 cost_frac = self.cost_model.compute_total_cost(
-                    weights_mat[t - 1], weights_mat[t],
+                    weights_before,
+                    weights_after,
                     nav=float(nav_before_cost),
-                    close_prices=close_mat[t],
+                    close_prices=close_today,
                 )
-                nav[t] -= cost_frac * nav_before_cost
                 total_cost_bps += cost_frac * 10_000
+            nav_after_cost = nav_before_cost * (1.0 - cost_frac)
+            position_values = executed_values
+            actual_weights[t] = executed_values / nav_after_cost
+            turnover_values[t] = turnover_t
+            nav_values[t] = nav_after_cost
+            previous_nav = nav_after_cost
 
-        nav = pd.Series(nav[1:], index=dates)
-        daily_ret = nav.pct_change().fillna(0)
-        turnover = pd.Series(
-            np.abs(weights_mat[1:] - weights_mat[:-1]).sum(axis=1),
-            index=dates,
-        )
-        return nav, daily_ret, turnover, total_cost_bps
+        nav = pd.Series(nav_values, index=dates, name="nav")
+        daily_ret = nav.pct_change()
+        if len(daily_ret):
+            daily_ret.iloc[0] = nav.iloc[0] / self.config.initial_capital - 1.0
+        turnover = pd.Series(turnover_values, index=dates, name="turnover")
+        return nav, daily_ret.fillna(0.0), turnover, total_cost_bps, actual_weights

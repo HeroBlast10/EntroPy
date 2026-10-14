@@ -10,12 +10,17 @@ build/
 data/*.parquet
 data/**/*.parquet
 data/**/*.csv
+data/**/*.json
+data/**/*.html
 data/manifest.json
 data/backtest/
 data/portfolio/
 data/factors/
 data/reports/
 data/live/
+data/experiments/
+data/fundamentals/
+data/research/
 
 # Keep the data directory structure
 !data/.gitkeep
@@ -29,6 +34,11 @@ simfin_data/
 
 # Pytest
 .pytest_cache/
+.pytest_tmp/
+.pytest_*/
+.pytest_*.xml
+.pytest_*.log
+.universe_build.*.log
 htmlcov/
 .coverage
 

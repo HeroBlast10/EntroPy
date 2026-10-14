@@ -59,7 +59,11 @@ class TSForecaster:
             "SPECTRAL_ENTROPY_60D", "HURST_60D",
             "ROLLING_SKEW_60D", "ROLLING_KURT_60D",
         ]
-        self.weights = weights
+        if weights is not None and len(weights) != len(self.ts_factor_names):
+            raise ValueError("weights must have the same length as ts_factor_names")
+        self.weights = list(weights) if weights is not None else None
+        default = [1.0 / len(self.ts_factor_names)] * len(self.ts_factor_names)
+        self._weight_map = dict(zip(self.ts_factor_names, self.weights or default))
     
     def score(self, factor_df: pd.DataFrame) -> pd.DataFrame:
         """Compute per-stock time-series alpha score."""
@@ -69,9 +73,10 @@ class TSForecaster:
             df["alpha_ts"] = 0.0
             return df[["date", "ticker", "alpha_ts"]]
         
-        w = self.weights or [1.0 / len(available)] * len(available)
-        w = np.array(w[:len(available)])
-        w = w / w.sum()
+        w = np.asarray([self._weight_map[name] for name in available], dtype=float)
+        if not np.isfinite(w).all() or np.isclose(np.abs(w).sum(), 0.0):
+            raise ValueError("available time-series factor weights must be finite and non-zero")
+        w = w / np.abs(w).sum()
         
         directions = self._infer_directions(available)
         # Convert each raw TS feature into the common effective signal scale.
@@ -88,7 +93,16 @@ class TSForecaster:
             ).values
         
         z_cols = [f"_eff_{f}" for f in available]
-        df["alpha_ts"] = np.nanmean(df[z_cols].values * w, axis=1)
+        values = df[z_cols].to_numpy(dtype=float)
+        valid = np.isfinite(values)
+        numerator = np.nansum(values * w, axis=1)
+        denominator = (valid * np.abs(w)).sum(axis=1)
+        df["alpha_ts"] = np.divide(
+            numerator,
+            denominator,
+            out=np.full(len(df), np.nan, dtype=float),
+            where=denominator > 0,
+        )
         return df[["date", "ticker", "alpha_ts"]]
 
     @staticmethod
@@ -127,7 +141,7 @@ class MomentumZScoreSignal:
         ticker_col = "ticker" if "ticker" in df.columns else "ts_code"
         
         for _, grp in df.groupby(ticker_col):
-            g = grp.copy()
+            g = grp.sort_values("date").copy() if "date" in grp.columns else grp.copy()
             vel = g[velocity_col].values.astype(np.float64)
             z = _rolling_zscore(vel, self.zscore_window)
             g["vel_zscore"] = z

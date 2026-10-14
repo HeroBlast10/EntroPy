@@ -50,13 +50,15 @@ logger.add(sys.stderr, level="INFO", format=(
               help="Forward return periods (trading days) for evaluation.")
 @click.option("--use-cache/--no-cache", default=True,
               help="Use shared price feature cache during factor computation.")
-def main(factors, evaluate, list_factors, periods, use_cache):
+@click.option("--strict-quality/--allow-quality-warnings", default=True,
+              help="Reject sparse or mostly constant factors instead of only reporting warnings.")
+def main(factors, evaluate, list_factors, periods, use_cache, strict_quality):
     """EntroPy — Compute and evaluate alpha factors."""
     set_project_root(_project_root)
 
     from quant_platform.core.signals.registry import FactorRegistry
 
-    reg = FactorRegistry()
+    reg = FactorRegistry(reject_quality_warnings=strict_quality)
     reg.discover()
 
     # --- List mode ---
@@ -97,6 +99,9 @@ def main(factors, evaluate, list_factors, periods, use_cache):
     )
     out_path = reg.save_factors(factor_df)
     click.echo(f"\n✓ Factors saved → {out_path}")
+    quality_path = out_path.with_name("factor_quality_report.csv")
+    reg.last_quality_report.to_csv(quality_path, index=False)
+    click.echo(f"Factor quality report saved → {quality_path}")
 
     # --- Evaluate ---
     if evaluate:

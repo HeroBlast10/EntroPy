@@ -7,9 +7,9 @@ Factors
 3. **GROSS_PROFITABILITY**    — Gross profit / total assets (Novy-Marx 2013)
 4. **ASSET_GROWTH**           — YoY % change in total assets (Cooper, Gulen & Schill 2008)
 
-All factors use **point-in-time** fundamentals data with publication lag
-already applied by the fundamentals pipeline (see ``quant_platform.core.data.fundamentals``).
-This prevents look-ahead bias.
+Production use requires fundamentals whose ``is_point_in_time`` provenance is
+true (see ``quant_platform.core.data.fundamentals``).  Research fallbacks are
+explicitly tagged non-PIT and must not be used for production claims.
 
 Trailing 12M (TTM) calculation
 -------------------------------
@@ -53,28 +53,42 @@ def _compute_ttm(
     if metric_col not in fund.columns:
         return pd.DataFrame(columns=[date_col, ticker_col, f"{metric_col}_ttm"])
     
-    fund = fund.copy()
+    required = [date_col, ticker_col, report_col, metric_col]
+    fund = fund[required].copy()
     fund[date_col] = pd.to_datetime(fund[date_col])
     fund[report_col] = pd.to_datetime(fund[report_col])
+    fund = fund.dropna(subset=[date_col, ticker_col, report_col])
     fund = fund.sort_values([ticker_col, date_col, report_col])
-    
+
+    out_col = f"{metric_col}_ttm"
     results = []
-    for (dt, tkr), grp in fund.groupby([date_col, ticker_col]):
-        grp = grp.sort_values(report_col)
-        vals = grp[metric_col].dropna()
-        
-        if len(vals) == 0:
-            ttm = np.nan
-        elif len(vals) >= n_quarters:
-            # Sum most recent 4 quarters
-            ttm = vals.iloc[-n_quarters:].sum()
-        else:
-            # Fallback: use most recent value (likely annual)
-            ttm = vals.iloc[-1]
-        
-        results.append({date_col: dt, ticker_col: tkr, f"{metric_col}_ttm": ttm})
-    
-    return pd.DataFrame(results)
+    for ticker, group in fund.groupby(ticker_col, sort=False):
+        # Keep the latest version of every fiscal period known as of each
+        # availability date.  Grouping only by (date, ticker) used to see one
+        # newly published row and therefore returned a single quarter as TTM.
+        known_reports: dict[pd.Timestamp, float] = {}
+        for available_date, arrivals in group.groupby(date_col, sort=True):
+            for _, row in arrivals.sort_values(report_col).iterrows():
+                value = row[metric_col]
+                if pd.notna(value):
+                    known_reports[pd.Timestamp(row[report_col])] = float(value)
+
+            latest = sorted(known_reports.items(), key=lambda item: item[0])[-n_quarters:]
+            if not latest:
+                ttm = np.nan
+            elif len(latest) == n_quarters:
+                ttm = float(sum(value for _, value in latest))
+            else:
+                # Preserve the documented annual/incomplete-history fallback.
+                ttm = float(latest[-1][1])
+
+            results.append({
+                date_col: available_date,
+                ticker_col: ticker,
+                out_col: ttm,
+            })
+
+    return pd.DataFrame(results, columns=[date_col, ticker_col, out_col])
 
 
 def _compute_report_yoy_change(
@@ -170,6 +184,58 @@ def _merge_fundamentals_to_prices(
     return merged
 
 
+def _daily_value_ratio(
+    prices: pd.DataFrame,
+    events: pd.DataFrame,
+    numerator_col: str,
+    output_col: str,
+) -> pd.Series:
+    """Carry PIT accounting data forward and reprice split-safe market cap."""
+    from quant_platform.core.data.universe import (
+        _daily_market_cap_from_events,
+    )
+
+    price_col = "close" if "close" in prices.columns else "adj_close"
+    price_columns = ["date", "ticker", price_col]
+    if "split_factor" in prices.columns:
+        price_columns.append("split_factor")
+    px = prices[price_columns].copy()
+    if price_col != "close":
+        px.rename(columns={price_col: "close"}, inplace=True)
+    px["date"] = pd.to_datetime(px["date"])
+    px = px.sort_values(["ticker", "date"]).reset_index(drop=True)
+
+    required = ["date", "ticker", numerator_col]
+    optional = [
+        col for col in ("shares_outstanding", "market_cap", "report_date")
+        if col in events.columns
+    ]
+    event = events[required + optional].copy()
+    event["date"] = pd.to_datetime(event["date"])
+    event = event.drop_duplicates(["date", "ticker"], keep="last")
+    daily_mcap = _daily_market_cap_from_events(
+        px,
+        event,
+    )
+    numerator_events = event[["date", "ticker", numerator_col]]
+    merged = px[["date", "ticker"]].merge(
+        numerator_events,
+        on=["date", "ticker"],
+        how="left",
+        validate="one_to_one",
+    ).sort_values(["ticker", "date"])
+    merged[numerator_col] = merged.groupby(
+        "ticker",
+        sort=False,
+    )[numerator_col].ffill()
+
+    merged[output_col] = (
+        merged[numerator_col]
+        / daily_mcap.reindex(merged.index).replace(0.0, np.nan)
+    )
+    return merged.set_index(["date", "ticker"])[output_col]
+
+
 # ===================================================================
 # Factors
 # ===================================================================
@@ -208,18 +274,25 @@ class EarningsYield(FactorBase):
         # Compute TTM net income
         ttm = _compute_ttm(fundamentals, "net_income")
         
-        # Merge with market cap
-        fund_subset = fundamentals[["date", "ticker", "market_cap"]].copy()
-        ttm = ttm.merge(fund_subset, on=["date", "ticker"], how="left")
-        
-        # E/P = net_income_ttm / market_cap
-        ttm["ep"] = ttm["net_income_ttm"] / ttm["market_cap"]
-        
-        # Merge to prices grid
-        merged = _merge_fundamentals_to_prices(prices, ttm, ["ep"])
-        
-        result = merged.set_index(["date", "ticker"])["ep"]
-        return result
+        snapshot_cols = ["date", "ticker", "market_cap"]
+        if "shares_outstanding" in fundamentals.columns:
+            snapshot_cols.append("shares_outstanding")
+        snapshots = (
+            fundamentals[snapshot_cols]
+            .drop_duplicates(["date", "ticker"], keep="last")
+        )
+        events = ttm.merge(
+            snapshots,
+            on=["date", "ticker"],
+            how="left",
+            validate="one_to_one",
+        )
+        return _daily_value_ratio(
+            prices,
+            events,
+            numerator_col="net_income_ttm",
+            output_col="ep",
+        )
 
 
 class BookToMarket(FactorBase):
@@ -252,12 +325,21 @@ class BookToMarket(FactorBase):
             logger.warning("BOOK_TO_MARKET: no fundamentals data provided")
             return pd.Series(dtype=float)
         
-        fund = fundamentals[["date", "ticker", "total_equity", "market_cap"]].copy()
-        fund["bm"] = fund["total_equity"] / fund["market_cap"]
-        
-        merged = _merge_fundamentals_to_prices(prices, fund, ["bm"])
-        result = merged.set_index(["date", "ticker"])["bm"]
-        return result
+        cols = ["date", "ticker", "total_equity", "market_cap"]
+        if "report_date" in fundamentals.columns:
+            cols.append("report_date")
+        if "shares_outstanding" in fundamentals.columns:
+            cols.append("shares_outstanding")
+        events = fundamentals[cols].drop_duplicates(
+            ["date", "ticker"],
+            keep="last",
+        )
+        return _daily_value_ratio(
+            prices,
+            events,
+            numerator_col="total_equity",
+            output_col="bm",
+        )
 
 
 class GrossProfitability(FactorBase):

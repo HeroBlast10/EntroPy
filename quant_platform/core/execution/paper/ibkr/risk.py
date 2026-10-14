@@ -12,6 +12,8 @@ Design:
 from __future__ import annotations
 
 import datetime as dt
+import math
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
@@ -20,22 +22,27 @@ from loguru import logger
 from quant_platform.core.execution.paper.ibkr.config import RiskLimits
 
 
+def trading_date() -> dt.date:
+    return dt.datetime.now(ZoneInfo("America/New_York")).date()
+
+
 @dataclass
 class SessionState:
     """Mutable counters for the current trading session."""
 
-    date: dt.date = field(default_factory=dt.date.today)
+    date: dt.date = field(default_factory=trading_date)
     trades_count: int = 0
     traded_notional: float = 0.0
     realised_pnl: float = 0.0
     unrealised_pnl: float = 0.0
+    daily_pnl: Optional[float] = None
 
     @property
-    def total_pnl(self) -> float:
-        return self.realised_pnl + self.unrealised_pnl
+    def total_pnl(self) -> Optional[float]:
+        return self.daily_pnl
 
     def reset_if_new_day(self):
-        today = dt.date.today()
+        today = trading_date()
         if today != self.date:
             logger.info("New session day {} — resetting counters", today)
             self.date = today
@@ -43,6 +50,7 @@ class SessionState:
             self.traded_notional = 0.0
             self.realised_pnl = 0.0
             self.unrealised_pnl = 0.0
+            self.daily_pnl = None
 
 
 class RiskManager:
@@ -114,21 +122,12 @@ class RiskManager:
                            f"{self.limits.max_positions}")
         return True, ""
 
-    def _check_position_notional(
-        self, existing_notional: float, order_notional: float
-    ) -> Tuple[bool, str]:
-        if not self.limits.check_position_limits:
-            return True, ""
-        projected = existing_notional + order_notional
-        if projected > self.limits.max_position_notional:
-            return False, (f"Projected position ${projected:,.0f} exceeds limit "
-                           f"${self.limits.max_position_notional:,.0f}")
-        return True, ""
-
     def _check_daily_loss(self) -> Tuple[bool, str]:
         if not self.limits.check_session_limits:
             return True, ""
-        if self.session.total_pnl < -self.limits.max_daily_loss:
+        if self.session.total_pnl is None:
+            return False, "Daily PnL unavailable; increasing risk is blocked"
+        if self.session.total_pnl <= -self.limits.max_daily_loss:
             return False, (f"Daily loss ${abs(self.session.total_pnl):,.0f} exceeds limit "
                            f"${self.limits.max_daily_loss:,.0f}")
         return True, ""
@@ -161,6 +160,7 @@ class RiskManager:
         price: float,
         current_positions: int = 0,
         existing_position_notional: float = 0.0,
+        current_position_shares: Optional[float] = None,
     ) -> Tuple[bool, str]:
         """Run all pre-trade risk checks.
 
@@ -170,15 +170,34 @@ class RiskManager:
         """
         self.session.reset_if_new_day()
 
-        notional = abs(shares * price)
+        if side not in {"BUY", "SELL"} or not isinstance(shares, int) or shares <= 0:
+            return False, "Invalid side or share quantity"
+        if not math.isfinite(price) or price <= 0 or not math.isfinite(existing_position_notional):
+            return False, "Invalid reference price or position exposure"
+        notional = shares * price
+        projected = existing_position_notional + (notional if side == "BUY" else -notional)
+        reducing = (existing_position_notional != 0 and
+                    existing_position_notional * projected >= 0 and
+                    abs(projected) < abs(existing_position_notional))
+        if self.limits.long_only and projected < -1e-6:
+            return False, "Long-only setup cannot create a short position"
+
+        position_check = (True, "")
+        if self.limits.check_position_limits and not reducing:
+            if abs(projected) > self.limits.max_position_notional:
+                position_check = (False, "Projected position exceeds notional limit")
+            if current_position_shares is not None:
+                projected_shares = current_position_shares + (shares if side == "BUY" else -shares)
+                if abs(projected_shares) > self.limits.max_position_shares:
+                    position_check = (False, "Projected position exceeds share limit")
 
         checks = [
             self._check_kill_switch(),
             self._check_order_notional(notional),
             self._check_order_shares(abs(shares)),
-            self._check_position_count(current_positions),
-            self._check_position_notional(existing_position_notional, notional),
-            self._check_daily_loss(),
+            self._check_position_count(current_positions) if existing_position_notional == 0 else (True, ""),
+            position_check,
+            self._check_daily_loss() if not reducing else (True, ""),
             self._check_daily_trades(),
             self._check_daily_notional(notional),
         ]
@@ -203,7 +222,8 @@ class RiskManager:
 
         # Auto kill-switch on daily loss breach
         if (self.limits.check_session_limits and
-                self.session.total_pnl < -self.limits.max_daily_loss):
+                self.session.total_pnl is not None and
+                self.session.total_pnl <= -self.limits.max_daily_loss):
             self.activate_kill_switch(
                 f"Daily loss limit breached: ${abs(self.session.total_pnl):,.0f}"
             )
@@ -211,6 +231,11 @@ class RiskManager:
     def update_unrealised_pnl(self, unrealised: float):
         """Update unrealised PnL from portfolio snapshot."""
         self.session.unrealised_pnl = unrealised
+
+    def update_daily_pnl(self, daily: Optional[float]) -> None:
+        """Use broker daily PnL, not lifetime unrealised PnL or a synthetic zero."""
+        self.session.reset_if_new_day()
+        self.session.daily_pnl = daily if daily is not None and math.isfinite(daily) and abs(daily) < 1e100 else None
 
     # ------------------------------------------------------------------
     # Status
@@ -222,7 +247,7 @@ class RiskManager:
             "kill_switch": self.limits.kill_switch,
             "daily_trades": self.session.trades_count,
             "daily_notional": f"${self.session.traded_notional:,.0f}",
-            "daily_pnl": f"${self.session.total_pnl:,.0f}",
+            "daily_pnl": (f"${self.session.total_pnl:,.0f}" if self.session.total_pnl is not None else None),
             "limits": {
                 "max_order_notional": self.limits.max_order_notional,
                 "max_daily_loss": self.limits.max_daily_loss,

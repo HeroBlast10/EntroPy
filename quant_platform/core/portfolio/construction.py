@@ -142,7 +142,13 @@ class PortfolioConstructor(abc.ABC):
             if sig_today.empty or uni_today.empty:
                 continue
 
-            # Filter to tradable universe
+            # Persisted universe files contain passed rows only, but callers
+            # may supply a complete diagnostic frame through
+            # ``universe_override``.  Honour its explicit tradability flag.
+            if "pass_all_filters" in uni_today.columns:
+                uni_today = uni_today.loc[
+                    uni_today["pass_all_filters"].fillna(False).astype(bool)
+                ]
             tradable = set(uni_today["ticker"].unique())
             sig_today = sig_today[sig_today["ticker"].isin(tradable)]
 
@@ -216,5 +222,9 @@ class PortfolioConstructor(abc.ABC):
         if longs.sum() > 0:
             longs = longs / longs.sum()
         if shorts.sum() < 0:
-            shorts = shorts / shorts.abs().sum() * (-1)
+            # ``shorts`` already contains negative values.  Dividing by the
+            # absolute total preserves their sign and makes the short sleeve
+            # sum to -1; multiplying by -1 here would silently turn a
+            # long-short portfolio into a fully invested long-only portfolio.
+            shorts = shorts / shorts.abs().sum()
         return pd.concat([longs, shorts])

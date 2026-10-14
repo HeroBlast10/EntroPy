@@ -1,7 +1,9 @@
-"""Fetch and persist point-in-time fundamental data for US equities.
+"""Fetch and persist fundamental data for US equities with provenance.
 
-Data source: **SimFin** (free tier).  Falls back to ``yfinance`` for
-market-cap / shares-outstanding when SimFin data is unavailable.
+SimFin rows with actual publication dates are eligible for production
+point-in-time use.  Optional ``yfinance`` snapshot fallbacks are research
+conveniences only; they are explicitly marked non-PIT and rejected by the
+production contract.
 
 Point-in-time handling
 ----------------------
@@ -153,6 +155,14 @@ def _generate_quality_report(df: pd.DataFrame) -> Dict:
             if "report_date" in df.columns and df["report_date"].notna().any() else None
         ),
         "field_coverage": field_coverage,
+        "data_sources": (
+            sorted(df["data_source"].dropna().astype(str).unique().tolist())
+            if "data_source" in df.columns else []
+        ),
+        "point_in_time_fraction": (
+            float(df["is_point_in_time"].fillna(False).eq(True).mean())
+            if "is_point_in_time" in df.columns and len(df) else 0.0
+        ),
     }
     
     return report
@@ -168,7 +178,38 @@ try:
     import simfin as sf
     _SIMFIN_AVAILABLE = True
 except ImportError:
-    logger.warning("simfin not installed – fundamentals will use yfinance fallback only")
+    logger.warning(
+        "simfin not installed; only explicitly non-PIT research fallbacks are available"
+    )
+
+
+def require_point_in_time_fundamentals(
+    fundamentals: pd.DataFrame,
+    context: str = "production features",
+) -> None:
+    """Fail closed unless every fundamental row has explicit PIT provenance."""
+    if fundamentals.empty:
+        raise ValueError(f"{context} requires non-empty point-in-time fundamentals")
+    required = {"data_source", "is_point_in_time", "publish_date"}
+    missing = required - set(fundamentals.columns)
+    if missing:
+        raise ValueError(
+            f"{context} requires fundamental PIT provenance; missing {sorted(missing)}"
+        )
+    status = fundamentals["is_point_in_time"].fillna(False).eq(True)
+    if not status.all():
+        sources = sorted(
+            fundamentals.loc[~status, "data_source"]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+        raise ValueError(
+            f"{context} rejects non-PIT fundamental sources: {sources}"
+        )
+    if pd.to_datetime(fundamentals["publish_date"], errors="coerce").isna().any():
+        raise ValueError(f"{context} requires an actual publish_date for every row")
 
 
 def _setup_simfin(api_key: Optional[str] = None, data_dir: Optional[str] = None) -> None:
@@ -181,7 +222,11 @@ def _setup_simfin(api_key: Optional[str] = None, data_dir: Optional[str] = None)
     if data_dir is None:
         data_dir = os.path.join(os.path.expanduser("~"), "simfin_data")
     sf.set_data_dir(data_dir)
-    logger.debug("SimFin configured (api_key={}…, data_dir={})", key[:4], data_dir)
+    logger.debug(
+        "SimFin configured (credential_source={}, data_dir={})",
+        "environment/config" if key != "free" else "free-tier",
+        data_dir,
+    )
 
 
 def _fetch_simfin_statements(variant: str = "free") -> Dict[str, pd.DataFrame]:
@@ -243,7 +288,10 @@ def _fetch_market_cap_yf(
             continue
 
     if not records:
-        return pd.DataFrame(columns=["date", "ticker", "market_cap", "shares_outstanding"])
+        return pd.DataFrame(columns=[
+            "date", "ticker", "market_cap", "shares_outstanding",
+            "data_source", "is_point_in_time",
+        ])
 
     shares_df = pd.DataFrame(records)
     # Cross-join with dates (market_cap filled later via prices)
@@ -251,6 +299,8 @@ def _fetch_market_cap_yf(
     date_df = pd.DataFrame({"date": dates, "_key": 1})
     out = date_df.merge(shares_df, on="_key").drop(columns="_key")
     out["market_cap"] = np.nan  # will be filled by caller using close prices
+    out["data_source"] = "yfinance_current_shares_snapshot"
+    out["is_point_in_time"] = False
     return out
 
 
@@ -394,6 +444,8 @@ def _fetch_financials_yf(
 
     fund = pd.DataFrame(all_records)
     fund["report_date"] = pd.to_datetime(fund["report_date"])
+    fund["data_source"] = "yfinance_quarterly_snapshot"
+    fund["is_point_in_time"] = False
 
     # Approximate publish_date as report_date + 45 days (SEC 10-Q deadline)
     fund["publish_date"] = fund["report_date"] + pd.Timedelta(days=45)
@@ -521,6 +573,8 @@ def _merge_simfin_statements(
 
     # Apply point-in-time lag
     merged = _apply_pit_lag(merged, "publish_date", lag_days)
+    merged["data_source"] = "simfin_filing_publish_date"
+    merged["is_point_in_time"] = True
 
     return merged
 
@@ -533,12 +587,24 @@ def build_fundamentals(
     tickers: Optional[List[str]] = None,
     prices_path: Optional[Path | str] = None,
     output_path: Optional[Path | str] = None,
+    mode: Optional[str] = None,
+    allow_non_pit_fallback: Optional[bool] = None,
 ) -> Path:
     """Full pipeline: fetch → merge → PIT-align → validate → save.
 
     Returns the output Parquet path.
     """
     cfg = load_config()
+    contract_cfg = cfg.get("data_contract", {})
+    contract_mode = (mode or contract_cfg.get("mode", "research")).lower()
+    if contract_mode not in {"research", "production"}:
+        raise ValueError("mode must be 'research' or 'production'")
+    if allow_non_pit_fallback is None:
+        allow_non_pit_fallback = bool(
+            contract_cfg.get("allow_non_pit_fundamentals", True)
+        )
+    if contract_mode == "production":
+        allow_non_pit_fallback = False
     lag_days = cfg["fundamentals"]["publication_lag_days"]
     variant = cfg["fundamentals"]["simfin_variant"]
     api_key = cfg["fundamentals"].get("simfin_api_key") or os.environ.get("SIMFIN_API_KEY")
@@ -552,6 +618,12 @@ def build_fundamentals(
     _setup_simfin(api_key)
     stmts = _fetch_simfin_statements(variant)
     fund = _merge_simfin_statements(stmts, lag_days)
+
+    if fund.empty and not allow_non_pit_fallback:
+        raise RuntimeError(
+            "No PIT SimFin filings are available; production mode and "
+            "strict research mode reject yfinance statement snapshots"
+        )
 
     if fund.empty:
         logger.warning("SimFin returned no data – falling back to yfinance financials")
@@ -618,10 +690,18 @@ def build_fundamentals(
 
     fund = fund.sort_values(["date", "ticker"]).reset_index(drop=True)
 
+    if contract_mode == "production":
+        require_point_in_time_fundamentals(
+            fund,
+            context="production fundamentals build",
+        )
+
     validate_dataframe(fund, "fundamentals")
 
     # --- Generate and log quality report ---
     quality_report = _generate_quality_report(fund)
+    quality_report["contract_mode"] = contract_mode
+    quality_report["allow_non_pit_fallback"] = bool(allow_non_pit_fallback)
     
     logger.info("Fundamentals: {} rows, {} tickers", len(fund), fund["ticker"].nunique())
     logger.info("Quality Report:")

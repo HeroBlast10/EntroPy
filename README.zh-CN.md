@@ -10,7 +10,7 @@ EntroPy 用于检验状态空间、市场状态、熵、均值回复与传统横
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-202%20passed-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-297%20passed-brightgreen.svg)](#测试)
 [![Factors](https://img.shields.io/badge/factors-42个注册因子-orange.svg)](#因子库)
 
 </div>
@@ -248,7 +248,7 @@ quant_platform/
 ├── experiments/                # 实验 YAML 配置
 ├── notebooks/                  # ★ factor_research_walkthrough.ipynb（端到端演示）
 ├── scripts/                    # CLI 入口
-├── tests/                      # 202 个单元和回归测试
+├── tests/                      # 297 个单元和回归测试
 └── docs/                       # 设计文档 + 因子词典（初学者版）
 ```
 
@@ -265,6 +265,25 @@ quant_platform/
 | `python scripts/run_experiment.py` | 运行 YAML 实验 |
 | `python scripts/tune_factors.py` | 因子参数调优 |
 
+## IBKR 模拟连接与日频研究
+
+启动模拟 IB Gateway，使用端口 `4002`。默认配置
+`config/ibkr_paper.yaml` 保持只读、dry run，并关闭自动下单。
+登录凭据不应保存在仓库中。
+
+```bash
+python scripts/ibkr_diagnose.py --connect --history
+python scripts/ibkr_daily_research.py
+python scripts/ibkr_daily_research.py --offline
+```
+
+日频样本下载 8 只固定股票及 2 个基准约两年的日线，检查完整交易日，
+并生成动量、波动率和流动性指标。结果位于
+`data/research/ibkr_daily_pilot/`，生成数据、账户诊断及日志保留本地。
+该样本不是历史时点对齐的中小盘股票池，尚不能证明策略收益。
+独立的 `config/ibkr_paper_order_preview.yaml` 使用读写客户端，仍保持
+dry run 和自动提交关闭；券商权限与实际下单需单独验证。
+
 ## 测试
 
 ```bash
@@ -272,10 +291,10 @@ python -m compileall quant_platform scripts
 pytest -q
 ```
 
-最近验证结果：
+最近验证结果（Python 3.12，2026-10-14）：
 
 ```text
-202 passed   # 172 原有测试 + 30 新测试（覆盖升级模块）
+297 passed
 ```
 
 ## 已知限制

@@ -21,8 +21,17 @@ class CrossSectionalRanker:
         weights: Optional[List[float]] = None,
         directions: Optional[Dict[str, int]] = None,
     ):
+        if not factor_names:
+            raise ValueError("factor_names must not be empty")
+        if weights is not None and len(weights) != len(factor_names):
+            raise ValueError("weights must have the same length as factor_names")
         self.factor_names = factor_names
-        self.weights = weights or [1.0 / len(factor_names)] * len(factor_names)
+        self.weights = (
+            list(weights)
+            if weights is not None
+            else [1.0 / len(factor_names)] * len(factor_names)
+        )
+        self._weight_map = dict(zip(self.factor_names, self.weights))
         self.directions = directions or self._infer_directions(factor_names)
     
     def score(self, factor_df: pd.DataFrame) -> pd.DataFrame:
@@ -43,15 +52,26 @@ class CrossSectionalRanker:
             df[eff_col] = eff_idx.reindex(df.set_index(["date", "ticker"]).index).values
         
         # Weighted average of z-scores
-        eff_cols = [f"_eff_{f}" for f in self.factor_names if f"_eff_{f}" in df.columns]
+        available = [f for f in self.factor_names if f"_eff_{f}" in df.columns]
+        eff_cols = [f"_eff_{f}" for f in available]
         if not eff_cols:
             df["alpha_cs"] = 0.0
             return df[["date", "ticker", "alpha_cs"]]
         
         z_matrix = df[eff_cols].values
-        w = np.array(self.weights[:len(eff_cols)])
-        w = w / w.sum()
-        df["alpha_cs"] = np.nanmean(z_matrix * w, axis=1)
+        w = np.asarray([self._weight_map[name] for name in available], dtype=float)
+        if not np.isfinite(w).all() or np.isclose(np.abs(w).sum(), 0.0):
+            raise ValueError("available factor weights must be finite and non-zero")
+        w = w / np.abs(w).sum()
+        valid = np.isfinite(z_matrix)
+        numerator = np.nansum(z_matrix * w, axis=1)
+        denominator = (valid * np.abs(w)).sum(axis=1)
+        df["alpha_cs"] = np.divide(
+            numerator,
+            denominator,
+            out=np.full(len(df), np.nan, dtype=float),
+            where=denominator > 0,
+        )
         
         return df[["date", "ticker", "alpha_cs"]]
     

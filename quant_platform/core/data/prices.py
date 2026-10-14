@@ -4,12 +4,15 @@ Data source: ``yfinance`` (Yahoo Finance).
 
 Key design choices
 ------------------
-* **Raw + adjustment factor** — We store *unadjusted* OHLCV alongside a
-  cumulative split-adjustment factor so downstream code can reconstruct
-  adjusted prices without baking look-ahead information into the dataset.
+* **Raw + adjustment factor** — Yahoo's historical OHLCV is already expressed
+  on the latest split basis even when ``auto_adjust=False``.  We first undo
+  that provider-side split normalization, then store reconstructed historical
+  (as-traded) OHLCV alongside explicit split and total-return factors.
 * **Point-in-time adj_factor** — When ``point_in_time`` is ``True`` in
-  config, the adjustment factor for each row reflects only the splits that
-  had *already occurred* by that date, preventing future-split leakage.
+  config, the adjustment factor for each row reflects only corporate actions
+  that had already occurred by that date.  Reconstructing the observable raw
+  price is not a predictive input and prevents a split from creating a false
+  return.
 * **Calendar alignment** — Output is inner-joined to the NYSE trading
   calendar; weekends / holidays are never present.
 """
@@ -17,6 +20,7 @@ Key design choices
 from __future__ import annotations
 
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -110,6 +114,8 @@ def _download_single(
     start: str,
     end: str,
     max_retries: int = 3,
+    adjustment_method: str = "split_only",
+    point_in_time: bool = True,
 ) -> Optional[pd.DataFrame]:
     """Download daily data for one ticker via ``yfinance``.
 
@@ -119,10 +125,16 @@ def _download_single(
     for attempt in range(1, max_retries + 1):
         try:
             obj = yf.Ticker(ticker)
-            raw = obj.history(start=start, end=end, auto_adjust=False, actions=True)
-            if raw.empty:
+            provider_history = obj.history(
+                start=start,
+                end=end,
+                auto_adjust=False,
+                actions=True,
+            )
+            if provider_history.empty:
                 logger.warning("{}: empty history", ticker)
                 return None
+            raw = _restore_unadjusted_yahoo_history(provider_history)
 
             df = pd.DataFrame()
             df["date"] = raw.index.date
@@ -134,15 +146,16 @@ def _download_single(
             df["volume"] = raw["Volume"].astype("int64").values
             df["amount"] = (raw["Close"] * raw["Volume"]).values
 
-            # --- Compute point-in-time adjustment factor ---
-            # yfinance provides "Adj Close" which already embeds the
-            # cumulative adjustment.  We derive the factor from it.
-            adj_close_yf = raw["Adj Close"].values
-            close_arr = raw["Close"].values
-            with np.errstate(divide="ignore", invalid="ignore"):
-                adj_factor = np.where(close_arr != 0, adj_close_yf / close_arr, 1.0)
-            df["adj_factor"] = adj_factor
-            df["adj_close"] = adj_close_yf
+            df["split_factor"] = _cumulative_split_factor(raw).to_numpy(
+                dtype=float
+            )
+            adj_factor, adj_close = _compute_adjustment_series(
+                raw,
+                method=adjustment_method,
+                point_in_time=point_in_time,
+            )
+            df["adj_factor"] = adj_factor.to_numpy(dtype=float)
+            df["adj_close"] = adj_close.to_numpy(dtype=float)
 
             # --- Trading status ---
             df["is_tradable"] = df["volume"] > 0
@@ -155,6 +168,146 @@ def _download_single(
 
     logger.error("{}: all {} attempts failed", ticker, max_retries)
     return None
+
+
+def _split_steps(raw: pd.DataFrame) -> pd.Series:
+    """Return positive split ratios, with non-events represented by one."""
+    values = raw.get("Stock Splits", 0.0)
+    if isinstance(values, pd.Series):
+        splits = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    else:
+        splits = pd.Series(0.0, index=raw.index)
+    return splits.where(splits > 0.0, 1.0).astype(float)
+
+
+def _future_split_factor(raw: pd.DataFrame) -> pd.Series:
+    """Splits strictly after each row, used to restore as-traded units."""
+    steps = _split_steps(raw)
+    return (
+        steps.shift(-1, fill_value=1.0)
+        .iloc[::-1]
+        .cumprod()
+        .iloc[::-1]
+    )
+
+
+def _cumulative_split_factor(raw: pd.DataFrame) -> pd.Series:
+    """Splits effective on or before each row (a causal forward basis)."""
+    return _split_steps(raw).cumprod()
+
+
+def _restore_unadjusted_yahoo_history(history: pd.DataFrame) -> pd.DataFrame:
+    """Undo Yahoo's built-in split normalization of historical OHLCV.
+
+    ``auto_adjust=False`` disables dividend/``Adj Close`` auto-adjustment, but
+    Yahoo still reports historical OHLC and volume on the latest split basis.
+    Prices and cash dividends before a later split are therefore multiplied by
+    the future split ratio, while volume is divided by it.  ``Adj Close`` is
+    deliberately left on the provider basis for the explicitly non-PIT
+    total-return option.
+    """
+    restored = history.copy()
+    future_splits = _future_split_factor(restored)
+    for column in ("Open", "High", "Low", "Close"):
+        if column in restored.columns:
+            restored[column] = (
+                pd.to_numeric(restored[column], errors="coerce")
+                * future_splits
+            )
+    if "Dividends" in restored.columns:
+        restored["Dividends"] = (
+            pd.to_numeric(restored["Dividends"], errors="coerce")
+            * future_splits
+        )
+    if "Volume" in restored.columns:
+        volume = (
+            pd.to_numeric(restored["Volume"], errors="coerce")
+            / future_splits.replace(0.0, np.nan)
+        )
+        restored["Volume"] = volume.round().fillna(0).astype("int64")
+    return restored
+
+
+def _compute_adjustment_series(
+    raw: pd.DataFrame,
+    method: str = "split_only",
+    point_in_time: bool = True,
+) -> tuple[pd.Series, pd.Series]:
+    """Build split/total-return prices under an explicit adjustment policy."""
+    if method not in {"split_only", "total_return"}:
+        raise ValueError("adjustment.method must be 'split_only' or 'total_return'")
+
+    close = pd.to_numeric(raw["Close"], errors="coerce").astype(float)
+    split_steps = _split_steps(raw)
+
+    if point_in_time:
+        # Forward-scaled price: the factor changes only when the action becomes
+        # public/effective, so an incremental refresh never rewrites history.
+        factor = split_steps.cumprod()
+        if method == "total_return":
+            dividends = (
+                pd.to_numeric(raw.get("Dividends", 0.0), errors="coerce")
+                .fillna(0.0)
+                if isinstance(raw.get("Dividends", 0.0), pd.Series)
+                else pd.Series(0.0, index=raw.index)
+            )
+            reinvest_step = 1.0 + dividends / close.replace(0.0, np.nan)
+            factor = factor * reinvest_step.fillna(1.0).cumprod()
+        return factor, close * factor
+
+    if method == "total_return" and "Adj Close" in raw.columns:
+        adj_close = pd.to_numeric(raw["Adj Close"], errors="coerce").astype(float)
+        factor = adj_close / close.replace(0.0, np.nan)
+        return factor.fillna(1.0), adj_close
+
+    # Conventional backward split adjustment for explicitly non-PIT research.
+    future_splits = _future_split_factor(raw)
+    factor = 1.0 / future_splits
+    return factor, close * factor
+
+
+def _calibrate_incremental_adjustments(
+    old: pd.DataFrame,
+    new: pd.DataFrame,
+) -> pd.DataFrame:
+    """Put newly downloaded PIT factors on each ticker's existing scale."""
+    calibrated = new.copy()
+    for ticker, new_group in calibrated.groupby("ticker", sort=False):
+        old_group = old[old["ticker"] == ticker]
+        if old_group.empty:
+            continue
+        calibration_columns = ["adj_factor"]
+        if (
+            "split_factor" in old_group.columns
+            and "split_factor" in new_group.columns
+        ):
+            calibration_columns.append("split_factor")
+        overlap = old_group[["date", *calibration_columns]].merge(
+            new_group[["date", *calibration_columns]],
+            on="date",
+            suffixes=("_old", "_new"),
+        ).dropna()
+        overlap = overlap[
+            overlap["adj_factor_new"].abs() > 1e-15
+        ].sort_values("date")
+        if overlap.empty:
+            logger.warning("{}: no overlap available to calibrate adj_factor", ticker)
+            continue
+        anchor = overlap.iloc[0]
+        scale = float(anchor["adj_factor_old"] / anchor["adj_factor_new"])
+        mask = calibrated["ticker"].eq(ticker)
+        calibrated.loc[mask, "adj_factor"] *= scale
+        calibrated.loc[mask, "adj_close"] *= scale
+        if "split_factor" in calibration_columns:
+            split_anchor = overlap.loc[
+                overlap["split_factor_new"].abs() > 1e-15
+            ].iloc[0]
+            split_scale = float(
+                split_anchor["split_factor_old"]
+                / split_anchor["split_factor_new"]
+            )
+            calibrated.loc[mask, "split_factor"] *= split_scale
+    return calibrated
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +410,8 @@ def fetch_prices(
     cfg = load_config()
     global_start = start or cfg["date_range"]["start"]
     end = end or cfg["date_range"]["end"]
+    adjustment_method = cfg.get("adjustment", {}).get("method", "split_only")
+    point_in_time = bool(cfg.get("adjustment", {}).get("point_in_time", True))
     if tickers is None:
         tickers = get_ticker_list(cfg["universe"]["index_membership"])
 
@@ -267,6 +422,17 @@ def fetch_prices(
             existing_path = resolve_data_path(cfg["paths"]["prices_dir"], "prices.parquet")
         last_dates = _get_last_dates(existing_path)
         if last_dates:
+            import pyarrow.parquet as pq
+
+            existing_columns = set(
+                pq.ParquetFile(existing_path).schema.names
+            )
+            if "split_factor" not in existing_columns:
+                raise ValueError(
+                    "Existing price parquet predates the raw-price/split-factor "
+                    "contract. Rebuild it with incremental=False before "
+                    "appending new observations."
+                )
             logger.info("Incremental mode: {} tickers have existing data, using overlap_days={}",
                         len(last_dates), overlap_days)
 
@@ -279,7 +445,15 @@ def fetch_prices(
             futures = {}
             for tkr in tickers:
                 tkr_start = _compute_download_start(tkr, last_dates, global_start, overlap_days)
-                future = executor.submit(_download_single, tkr, tkr_start, end)
+                future = executor.submit(
+                    _download_single,
+                    tkr,
+                    tkr_start,
+                    end,
+                    3,
+                    adjustment_method,
+                    point_in_time,
+                )
                 futures[future] = tkr
             
             for future in tqdm(as_completed(futures), total=len(tickers), desc="Downloading prices"):
@@ -290,7 +464,13 @@ def fetch_prices(
         # Serial download with rate limiting
         for i, tkr in enumerate(tqdm(tickers, desc="Downloading prices")):
             tkr_start = _compute_download_start(tkr, last_dates, global_start, overlap_days)
-            result = _download_single(tkr, tkr_start, end)
+            result = _download_single(
+                tkr,
+                tkr_start,
+                end,
+                adjustment_method=adjustment_method,
+                point_in_time=point_in_time,
+            )
             if result is not None:
                 frames.append(result)
             # Rate-limit
@@ -308,6 +488,8 @@ def fetch_prices(
         from quant_platform.core.utils.io import load_parquet
         df_old = load_parquet(existing_path)
         df_old["date"] = pd.to_datetime(df_old["date"])
+        if point_in_time:
+            df_new = _calibrate_incremental_adjustments(df_old, df_new)
         
         # Concatenate and dedupe (keep newest download, not highest price)
         # df_new comes last in concat, so keep="last" preserves new downloads
@@ -319,7 +501,12 @@ def fetch_prices(
         df = df_new
 
     # Align to trading calendar
-    df = align_to_calendar(df, date_col="date")
+    df = align_to_calendar(
+        df,
+        date_col="date",
+        start=global_start,
+        end=end,
+    )
 
     # Sort for determinism
     df = df.sort_values(["date", "ticker"]).reset_index(drop=True)
@@ -345,7 +532,28 @@ def build_prices(
     """
     df = fetch_prices(tickers=tickers, start=start, end=end)
     validate_dataframe(df, "prices")
+    cfg = load_config()
     if output_path is None:
-        cfg = load_config()
         output_path = resolve_data_path(cfg["paths"]["prices_dir"], "prices.parquet")
-    return save_parquet(df, output_path, schema=PRICES_SCHEMA)
+    saved_path = save_parquet(df, output_path, schema=PRICES_SCHEMA)
+    adjustment = cfg.get("adjustment", {})
+    metadata = {
+        "data_source": "yfinance",
+        "raw_ohlcv_adjusted": False,
+        "provider_price_basis": "latest_split_adjusted",
+        "stored_price_basis": "historical_as_traded_reconstructed",
+        "split_factor_column": "split_factor",
+        "adjustment_method": adjustment.get("method", "split_only"),
+        "adjustment_point_in_time": bool(
+            adjustment.get("point_in_time", True)
+        ),
+        "start_date": str(df["date"].min().date()),
+        "end_date": str(df["date"].max().date()),
+        "rows": int(len(df)),
+        "tickers": int(df["ticker"].nunique()),
+    }
+    saved_path.with_suffix(".metadata.json").write_text(
+        json.dumps(metadata, indent=2),
+        encoding="utf-8",
+    )
+    return saved_path

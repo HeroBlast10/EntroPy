@@ -44,16 +44,16 @@ class RegimeOverlay:
         turb = factor_df.groupby("date")[self.turbulence_col].mean()
         
         result = weights_df.copy()
-        for idx, row in result.iterrows():
-            dt = row["date"]
-            if dt in turb.index and turb[dt] > self.threshold:
-                result.at[idx, "weight"] *= self.reduction
-        
-        # Renormalize weights per date
-        for dt, grp in result.groupby("date"):
-            total = grp["weight"].sum()
-            if total > 0:
-                result.loc[grp.index, "weight"] /= total
+        scalar = result["date"].map(
+            pd.Series(
+                np.where(turb > self.threshold, self.reduction, 1.0),
+                index=turb.index,
+            )
+        ).fillna(1.0)
+        result["weight"] = result["weight"] * scalar.to_numpy()
+
+        # Do not renormalise here: doing so would exactly cancel the intended
+        # long-only exposure reduction and can explode a near-zero-net book.
         
         return result
     

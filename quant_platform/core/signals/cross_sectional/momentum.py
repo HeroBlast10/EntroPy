@@ -123,11 +123,17 @@ class Mom12_1M(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         period = int(self._extra_params.get("period", self._DEFAULT_PERIOD))
+        formation_period = period - self._meta.lag
+        if formation_period <= 0:
+            raise ValueError("MOM_12_1M period must be greater than its lag")
         if _feature_cache is not None:
-            return _feature_cache.get(f"ret_{period}d")
+            return _feature_cache.get(f"ret_{formation_period}d")
         df = prices.sort_values(["ticker", "date"])
-        # period-day return; lag= in meta will shift to skip the most-recent month
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
+        # Base-class lagging then gives P[t-lag] / P[t-period] - 1,
+        # i.e. the classic 12-minus-1-month formation return.
+        return df.groupby("ticker")["adj_close"].transform(
+            lambda s: _pct_return(s, formation_period)
+        )
 
 
 class STR1W(FactorBase):
@@ -265,6 +271,18 @@ class ResidualMomentum(FactorBase):
     _DEFAULT_MOMENTUM_WINDOW = 252    # 12-month
     _DEFAULT_SKIP = 21                # skip 1 month
 
+    def __init__(self, **param_overrides) -> None:
+        # ``skip`` was historically an extra parameter.  Keep that API while
+        # making it the single lag applied by FactorBase.
+        if "skip" in param_overrides:
+            if (
+                "lag" in param_overrides
+                and int(param_overrides["lag"]) != int(param_overrides["skip"])
+            ):
+                raise ValueError("ResidualMomentum lag and skip must be equal")
+            param_overrides.setdefault("lag", int(param_overrides["skip"]))
+        super().__init__(**param_overrides)
+
     def _compute(
         self,
         prices: pd.DataFrame,
@@ -273,13 +291,20 @@ class ResidualMomentum(FactorBase):
     ) -> pd.Series:
         beta_window = int(self._extra_params.get("beta_window", self._DEFAULT_REGRESSION_WINDOW))
         mom_window = int(self._extra_params.get("mom_window", self._DEFAULT_MOMENTUM_WINDOW))
-        skip = int(self._extra_params.get("skip", self._DEFAULT_SKIP))
+        skip = int(self._extra_params.get("skip", self._meta.lag))
+        if skip != self._meta.lag:
+            raise ValueError(
+                "ResidualMomentum skip must equal FactorBase lag; "
+                "override both lag and skip together"
+            )
 
         df = prices[["date", "ticker", "adj_close"]].copy()
         if "market_cap" in prices.columns:
             df["market_cap"] = prices["market_cap"]
         df["date"] = pd.to_datetime(df["date"])
-        df = df.sort_values(["ticker", "date"]).reset_index(drop=True)
+        # Preserve caller row labels so FactorBase can align ticker-major
+        # calculations back to a date-major panel without positional joins.
+        df = df.sort_values(["ticker", "date"])
 
         ret = (
             df.groupby("ticker")["adj_close"]
@@ -352,10 +377,11 @@ class ResidualMomentum(FactorBase):
                 resid_block = y_block - X_block @ beta
                 resid[end:next_end] = resid_block
 
-            # Cumulative residual return over [t - mom_window, t - skip]
+            # FactorBase applies the skip as ``lag`` exactly once.  At
+            # portfolio date t this trailing block therefore covers the
+            # desired [t-mom_window, t-skip] interval.
             resid_series = pd.Series(resid, index=grp.index)
             cumulative = resid_series.rolling(mom_window - skip, min_periods=mom_window // 2).sum()
-            cumulative = cumulative.shift(skip)
             residual_cum.loc[grp.index] = cumulative.to_numpy()
 
         return residual_cum

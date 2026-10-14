@@ -77,8 +77,12 @@ class OptimizedPortfolio(PortfolioConstructor):
 
         # --- Today's cross-section ---
         sig_today = signal.loc[signal["date"] == date, ["ticker", sig_col]].copy()
-        uni_today = universe.loc[universe["date"] == date, "ticker"]
-        tradable = set(uni_today)
+        uni_today = universe.loc[universe["date"] == date].copy()
+        if "pass_all_filters" in uni_today.columns:
+            uni_today = uni_today.loc[
+                uni_today["pass_all_filters"].fillna(False).astype(bool)
+            ]
+        tradable = set(uni_today["ticker"])
         sig_today = sig_today[sig_today["ticker"].isin(tradable)].dropna(subset=[sig_col])
 
         if len(sig_today) < 5:
@@ -91,16 +95,14 @@ class OptimizedPortfolio(PortfolioConstructor):
         cov = self._estimate_covariance(signal, tickers, date, sig_col=sig_col)
         if cov is None:
             logger.warning("Covariance estimation failed on {} — using equal weight fallback", date.date())
-            n = len(tickers)
-            return pd.Series(1.0 / n, index=tickers)
+            return self._fallback_weights(alpha, tickers)
 
         # --- Solve ---
         try:
             w = self._solve_qp(alpha, cov, tickers, prev_weights)
         except Exception as exc:
             logger.warning("Optimisation failed on {} ({}), using equal weight fallback", date.date(), exc)
-            n = len(tickers)
-            w = pd.Series(1.0 / n, index=tickers)
+            w = self._fallback_weights(alpha, tickers)
 
         return w
 
@@ -203,7 +205,9 @@ class OptimizedPortfolio(PortfolioConstructor):
             return None
 
         b = exposures.to_numpy(dtype=float)
-        factor_cov = model.cov_matrix_
+        # FactorRiskModel exposes annualized risk; this optimizer otherwise
+        # uses daily stock covariance, so convert both components to daily.
+        factor_cov = model.cov_matrix_ / 252.0
         spec = model.specific_risk_.reindex(tickers).fillna(model.specific_risk_.median())
         spec_daily_var = (spec.fillna(0.0).to_numpy(dtype=float) / np.sqrt(252.0)) ** 2
 
@@ -331,7 +335,7 @@ class OptimizedPortfolio(PortfolioConstructor):
         )
 
         if not result.success:
-            logger.warning("SLSQP did not converge: {}", result.message)
+            raise RuntimeError(f"SLSQP did not converge: {result.message}")
 
         w_opt = result.x
 
@@ -339,6 +343,29 @@ class OptimizedPortfolio(PortfolioConstructor):
         w_opt[np.abs(w_opt) < 1e-6] = 0.0
 
         return pd.Series(w_opt, index=tickers)
+
+    def _fallback_weights(
+        self,
+        alpha: np.ndarray,
+        tickers: np.ndarray,
+    ) -> pd.Series:
+        """Return a mode-consistent fallback when risk estimation fails."""
+        n = len(tickers)
+        if n == 0:
+            return pd.Series(dtype=float)
+        if self.config.mode == PortfolioMode.LONG_ONLY:
+            return pd.Series(1.0 / n, index=tickers)
+
+        n_side = n // 2
+        if n_side == 0:
+            return pd.Series(dtype=float)
+        order = np.argsort(alpha)
+        short_idx = order[:n_side]
+        long_idx = order[-n_side:]
+        values = np.zeros(n, dtype=float)
+        values[long_idx] = 1.0 / n_side
+        values[short_idx] = -1.0 / n_side
+        return pd.Series(values, index=tickers)
 
     # ------------------------------------------------------------------
     # Helpers

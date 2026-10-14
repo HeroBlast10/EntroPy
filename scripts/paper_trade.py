@@ -1,41 +1,15 @@
 #!/usr/bin/env python
-"""CLI entry point for IB paper-trading demo.
+"""Explicit paper runner; defaults to one read-only, dry cycle.
 
-Prerequisites:
-  1. Install: pip install ib_insync
-  2. Start IB TWS or IB Gateway in **paper-trading** mode
-  3. Enable API access: TWS → Edit → Global Config → API → Settings
-     - Enable ActiveX and Socket Clients
-     - Socket port = 7497 (TWS paper) or 4002 (Gateway paper)
-     - Trusted IPs: 127.0.0.1
-
-Usage examples::
-
-    # Default: connect to TWS paper, equal-weight 5 tickers, rebalance every 5 min
-    python scripts/paper_trade.py
-
-    # Custom tickers and faster rebalance
-    python scripts/paper_trade.py --tickers AAPL MSFT NVDA --interval 60
-
-    # Dry run (log orders but don't submit)
-    python scripts/paper_trade.py --dry-run
-
-    # Connect to IB Gateway instead of TWS
-    python scripts/paper_trade.py --port 4002
-
-    # Limit order mode with 10 bps offset
-    python scripts/paper_trade.py --order-type LMT --limit-offset 10
-
-    # Strict risk limits
-    python scripts/paper_trade.py --max-order-notional 10000 --max-daily-loss 5000
-
-    # Kill switch test — activate immediately
-    python scripts/paper_trade.py --kill-switch
+For connectivity, use ibkr_diagnose.py. This remains a demo runner, not
+an exchange-calendar scheduler or a production order management system.
 """
-
 from __future__ import annotations
 
+import datetime as dt
+import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 _project_root = Path(__file__).resolve().parent.parent
@@ -43,143 +17,99 @@ sys.path.insert(0, str(_project_root))
 
 import click
 from loguru import logger
-
+from quant_platform.core.execution.paper.ibkr.config import load_paper_config
 from quant_platform.core.utils.io import set_project_root
-
-# Configure logger
-logger.remove()
-logger.add(sys.stderr, level="DEBUG", format=(
-    "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-    "<level>{level: <8}</level> | "
-    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
-    "<level>{message}</level>"
-))
 
 
 @click.command()
-@click.option("--host", type=str, default="127.0.0.1",
-              help="IB TWS/Gateway host.")
-@click.option("--port", type=int, default=7497,
-              help="IB port (7497=TWS paper, 4002=Gateway paper).")
-@click.option("--client-id", type=int, default=1,
-              help="IB client ID.")
-@click.option("--tickers", "-t", type=str, multiple=True,
-              default=["AAPL", "MSFT", "GOOGL", "AMZN", "JPM"],
-              help="Tickers to trade (repeat -t for multiple).")
-@click.option("--interval", type=int, default=300,
-              help="Rebalance interval in seconds.")
-@click.option("--capital", type=float, default=100_000.0,
-              help="Target portfolio capital (USD).")
-@click.option("--order-type", type=click.Choice(["MKT", "LMT", "ADAPTIVE"],
-              case_sensitive=False), default="MKT",
-              help="Order type.")
-@click.option("--limit-offset", type=float, default=5.0,
-              help="Limit price offset (bps) for LMT orders.")
-@click.option("--dry-run", is_flag=True, default=False,
-              help="Log orders without submitting.")
-@click.option("--readonly", is_flag=True, default=False,
-              help="Market data only, no order submission.")
-@click.option("--max-order-notional", type=float, default=50_000.0,
-              help="Max single order notional (USD).")
-@click.option("--max-daily-loss", type=float, default=10_000.0,
-              help="Max daily loss before kill switch (USD).")
-@click.option("--max-positions", type=int, default=20,
-              help="Max number of concurrent positions.")
-@click.option("--kill-switch", is_flag=True, default=False,
-              help="Start with kill switch ON (no orders, data only).")
-@click.option("--run-once", is_flag=True, default=False,
-              help="Run a single rebalance cycle then exit.")
-def main(
-    host, port, client_id, tickers, interval, capital,
-    order_type, limit_offset, dry_run, readonly,
-    max_order_notional, max_daily_loss, max_positions,
-    kill_switch, run_once,
-):
-    """EntroPy — IB Paper Trading Demo.
-
-    Connects to IB TWS/Gateway paper account, subscribes to real-time
-    market data, computes target weights, and submits rebalance orders
-    through a risk-gated order manager.
-    """
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path),
+              default=_project_root / "config/ibkr_paper.yaml", show_default=True)
+@click.option("--host", default=None)
+@click.option("--port", type=int, default=None)
+@click.option("--client-id", type=int, default=None)
+@click.option("--account", default=None, help="Explicit DU paper account.")
+@click.option("--tickers", "-t", multiple=True, help="Repeat -t for each symbol.")
+@click.option("--interval", type=int, default=None)
+@click.option("--capital", type=float, default=None, help="Provisional USD cap, not HKD.")
+@click.option("--order-type", type=click.Choice(["MKT", "LMT", "ADAPTIVE"]), default=None)
+@click.option("--limit-offset", type=float, default=None)
+@click.option("--weights-file", type=click.Path(exists=True, path_type=Path), default=None)
+@click.option("--dry-run/--no-dry-run", default=None)
+@click.option("--readonly/--readwrite", default=None)
+@click.option("--submit-paper-orders", is_flag=True,
+              help="Requires DU account, readwrite, no-dry-run and explicit weights.")
+@click.option("--max-order-notional", type=float, default=None)
+@click.option("--max-daily-loss", type=float, default=None)
+@click.option("--max-positions", type=int, default=None)
+@click.option("--kill-switch", is_flag=True)
+@click.option("--run-once/--loop", default=True, help="Default: one cycle. Loop is a demo timer.")
+@click.option("--show-config", is_flag=True, help="Print effective config without connecting.")
+def main(config_path, host, port, client_id, account, tickers, interval, capital,
+         order_type, limit_offset, weights_file, dry_run, readonly, submit_paper_orders,
+         max_order_notional, max_daily_loss, max_positions, kill_switch, run_once, show_config):
+    """EntroPy IB Gateway paper runner (orders disabled by default)."""
     set_project_root(_project_root)
+    try:
+        config = load_paper_config(config_path)
+        for attr, value in [("host", host), ("port", port), ("client_id", client_id),
+                            ("account", account), ("readonly", readonly)]:
+            if value is not None:
+                setattr(config.ib, attr, value)
+        for attr, value in [("rebalance_interval_sec", interval), ("target_capital", capital),
+                            ("order_type", order_type), ("limit_offset_bps", limit_offset),
+                            ("dry_run", dry_run)]:
+            if value is not None:
+                setattr(config.strategy, attr, value)
+        if tickers:
+            config.strategy.tickers = list(tickers)
+        if weights_file:
+            config.strategy.weights_file = str(weights_file.resolve())
+        elif config.strategy.weights_file:
+            path = Path(config.strategy.weights_file)
+            config.strategy.weights_file = str((path if path.is_absolute() else _project_root / path).resolve())
+        config.strategy.enable_paper_orders = submit_paper_orders
+        for attr, value in [("max_order_notional", max_order_notional),
+                            ("max_daily_loss", max_daily_loss), ("max_positions", max_positions)]:
+            if value is not None:
+                setattr(config.risk, attr, value)
+        if kill_switch:
+            config.risk.kill_switch = True
+        config.validate()
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    view = asdict(config)
+    if view["ib"]["account"]:
+        view["ib"]["account"] = "DU***"
+    click.echo(json.dumps(view, indent=2, ensure_ascii=False))
+    if show_config:
+        return
 
-    from quant_platform.core.execution.paper.ibkr.config import (
-        IBConfig, PaperTradingConfig, RiskLimits, StrategyConfig,
-    )
     from quant_platform.core.execution.paper.ibkr.strategy import PaperTradingStrategy
+    from quant_platform.core.execution.paper.ibkr.market_data import MarketDataManager
+    from quant_platform.core.execution.paper.ibkr.execution import OrderManager
+    from quant_platform.core.execution.paper.ibkr.portfolio import PortfolioTracker
 
-    # Build config from CLI args
-    ib_cfg = IBConfig(
-        host=host, port=port, client_id=client_id, readonly=readonly,
-    )
-
-    risk_cfg = RiskLimits(
-        kill_switch=kill_switch,
-        max_order_notional=max_order_notional,
-        max_daily_loss=max_daily_loss,
-        max_positions=max_positions,
-    )
-
-    strat_cfg = StrategyConfig(
-        tickers=list(tickers),
-        rebalance_interval_sec=interval,
-        target_capital=capital,
-        order_type=order_type.upper(),
-        limit_offset_bps=limit_offset,
-        dry_run=dry_run,
-    )
-
-    config = PaperTradingConfig(
-        ib=ib_cfg, risk=risk_cfg, strategy=strat_cfg,
-    )
-
-    # Log file
-    log_dir = Path(config.log_dir)
+    log_dir = _project_root / config.log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
-    import datetime as dt
-    log_file = log_dir / f"paper_trade_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    logger.add(str(log_file), level="DEBUG", rotation="10 MB")
-    logger.info("Log file: {}", log_file)
-
-    # Print config summary
-    click.echo("\n" + "=" * 60)
-    click.echo("  EntroPy — IB Paper Trading Demo")
-    click.echo("=" * 60)
-    click.echo(f"  Host:       {host}:{port}")
-    click.echo(f"  Tickers:    {', '.join(tickers)}")
-    click.echo(f"  Capital:    ${capital:,.0f}")
-    click.echo(f"  Order type: {order_type}")
-    click.echo(f"  Interval:   {interval}s")
-    click.echo(f"  Dry run:    {dry_run}")
-    click.echo(f"  Kill switch:{kill_switch}")
-    click.echo(f"  Log file:   {log_file}")
-    click.echo("=" * 60 + "\n")
-
-    # Run
+    sink = logger.add(str(log_dir / f"paper_trade_{dt.datetime.now():%Y%m%d_%H%M%S}.log"), rotation="10 MB")
     strategy = PaperTradingStrategy(config)
-
-    if run_once:
+    try:
+        if not run_once:
+            strategy.start()
+            return
         try:
             strategy.gateway.connect()
-            strategy.md = __import__(
-                "quant_platform.core.execution.paper.ibkr.market_data", fromlist=["MarketDataManager"]
-            ).MarketDataManager(strategy.gateway)
-            strategy.orders = __import__(
-                "quant_platform.core.execution.paper.ibkr.execution", fromlist=["OrderManager"]
-            ).OrderManager(strategy.gateway, strategy.risk_mgr, config)
-            strategy.portfolio = __import__(
-                "quant_platform.core.execution.paper.ibkr.portfolio", fromlist=["PortfolioTracker"]
-            ).PortfolioTracker(strategy.gateway)
-
+            strategy.md = MarketDataManager(strategy.gateway)
+            strategy.orders = OrderManager(strategy.gateway, strategy.risk_mgr, config)
+            strategy.portfolio = PortfolioTracker(strategy.gateway)
+            strategy.portfolio.subscribe_pnl()
             strategy.md.subscribe(config.strategy.tickers)
             strategy.gateway.sleep(5)
             strategy.run_once()
         finally:
             strategy.shutdown()
-    else:
-        strategy.start()
-
-    click.echo("\nDone.")
+    finally:
+        logger.remove(sink)
 
 
 if __name__ == "__main__":

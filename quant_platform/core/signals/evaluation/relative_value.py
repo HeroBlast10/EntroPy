@@ -50,8 +50,9 @@ class RelativeValueScorecard:
             - entry_exit_ratio: Ratio of profitable to unprofitable trades
         """
         # Merge signal with prices
+        price_col = "adj_close" if "adj_close" in prices.columns else "close"
         eval_df = signal_df.merge(
-            prices[["date", "ticker", "close"]],
+            prices[["date", "ticker", price_col]],
             on=["date", "ticker"],
             how="inner",
         )
@@ -90,7 +91,7 @@ class RelativeValueScorecard:
             
             # Simulate mean-reversion trades
             # Entry: when |z-score| > 2, Exit: when z-score crosses 0
-            returns = group["close"].pct_change()
+            returns = group[price_col].pct_change()
             z_score = apply_direction(group[signal_col], meta.direction)
             
             position = 0  # 0 = no position, +1 = long, -1 = short

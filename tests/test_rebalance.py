@@ -6,6 +6,11 @@ import pandas as pd
 import pytest
 
 from quant_platform.core.portfolio.rebalance import carry_forward_weights, rebalance_dates
+from quant_platform.core.portfolio.construction import (
+    PortfolioConfig,
+    PortfolioMode,
+)
+from quant_platform.core.portfolio.quantile import QuantilePortfolio
 
 
 class TestRebalanceDates:
@@ -30,6 +35,15 @@ class TestRebalanceDates:
     def test_invalid_freq_raises(self):
         with pytest.raises(ValueError, match="Unknown rebalance"):
             rebalance_dates("Q", "2023-01-01", "2023-12-31")
+
+    def test_incomplete_terminal_period_is_not_a_fake_rebalance(self):
+        weekly = rebalance_dates("W", "2026-07-01", "2026-07-20")
+        assert pd.Timestamp("2026-07-17") == weekly[-1]
+        assert pd.Timestamp("2026-07-20") not in weekly
+
+        monthly = rebalance_dates("M", "2026-06-01", "2026-07-20")
+        assert pd.Timestamp("2026-06-30") == monthly[-1]
+        assert not (monthly.to_period("M") == pd.Period("2026-07")).any()
 
 
 class TestCarryForward:
@@ -101,6 +115,49 @@ class TestCarryForward:
         assert "C" in tickers_after
         assert "D" in tickers_after
 
+    def test_full_cash_target_preserves_liquidation_and_cash_dates(self):
+        from quant_platform.core.data.calendar import trading_dates
+
+        all_dates = trading_dates("2024-01-02", "2024-01-10")
+        weights = pd.DataFrame({
+            "date": [all_dates[0], all_dates[2]],
+            "ticker": ["A", "A"],
+            "weight": [1.0, 0.0],
+        })
+        daily = carry_forward_weights(weights, all_dates)
+
+        cash_period = daily[daily["date"] >= all_dates[2]]
+        assert cash_period["date"].nunique() == len(all_dates[2:])
+        assert cash_period["weight"].eq(0.0).all()
+        assert cash_period.loc[
+            cash_period["date"].eq(all_dates[2]), "is_rebalance"
+        ].all()
+
+
+def test_quantile_ties_are_independent_of_input_order():
+    date = pd.Timestamp("2024-01-05")
+    signal = pd.DataFrame({
+        "date": date,
+        "ticker": list("ABCDEFGH"),
+        "signal": 1.0,
+    })
+    universe = signal[["date", "ticker"]].assign(pass_all_filters=True)
+    portfolio = QuantilePortfolio(
+        PortfolioConfig(
+            mode=PortfolioMode.LONG_SHORT,
+            n_quantiles=2,
+            long_quantile=2,
+            short_quantile=1,
+        )
+    )
+    first = portfolio._generate_weights(signal, universe, date).sort_index()
+    shuffled = portfolio._generate_weights(
+        signal.sample(frac=1.0, random_state=7),
+        universe.sample(frac=1.0, random_state=8),
+        date,
+    ).sort_index()
+    pd.testing.assert_series_equal(first, shuffled)
+
 
 class TestValidateWeights:
     def test_validate_long_only_valid(self):
@@ -141,3 +198,25 @@ class TestValidateWeights:
         
         with pytest.raises(ValueError, match="Negative weights"):
             validate_portfolio_weights(weights, mode="long_only")
+
+
+class TestLongShortNormalisation:
+    def test_preserves_short_sign_and_balances_sleeves(self):
+        from quant_platform.core.portfolio.construction import (
+            PortfolioConstructor,
+            PortfolioMode,
+        )
+
+        raw = pd.Series(
+            [2.0, 1.0, -3.0, -1.0],
+            index=["LONG_A", "LONG_B", "SHORT_A", "SHORT_B"],
+        )
+        weights = PortfolioConstructor.normalise_weights(
+            raw,
+            PortfolioMode.LONG_SHORT,
+        )
+
+        assert weights[weights > 0].sum() == pytest.approx(1.0)
+        assert weights[weights < 0].sum() == pytest.approx(-1.0)
+        assert weights.abs().sum() == pytest.approx(2.0)
+        assert weights.sum() == pytest.approx(0.0)

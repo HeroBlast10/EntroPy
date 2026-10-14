@@ -294,6 +294,31 @@ class TestFullCSCV:
         result2 = probability_of_backtest_overfitting(returns, n_splits=6, return_logits=False)
         assert "logits" not in result2
 
+    def test_two_variant_rank_is_not_forced_to_overfit(self):
+        from quant_platform.core.evaluation.overfit import probability_of_backtest_overfitting
+        rng = np.random.default_rng(991)
+        returns = pd.DataFrame(rng.normal(0, 0.01, size=(360, 2)))
+        returns.iloc[:, 0] += 0.004
+        result = probability_of_backtest_overfitting(
+            returns,
+            n_splits=6,
+            return_logits=False,
+        )
+        assert result["pbo"] < 0.10
+
+    def test_partial_nan_variant_does_not_poison_every_combination(self):
+        from quant_platform.core.evaluation.overfit import probability_of_backtest_overfitting
+        rng = np.random.default_rng(992)
+        returns = pd.DataFrame(rng.normal(0, 0.01, size=(360, 4)))
+        returns.iloc[::7, 2] = np.nan
+        result = probability_of_backtest_overfitting(
+            returns,
+            n_splits=6,
+            return_logits=False,
+        )
+        assert result["n_combinations"] > 0
+        assert np.isfinite(result["pbo"])
+
 
 # ===================================================================
 # Hansen SPA test

@@ -1,0 +1,7 @@
+# Fixed current-symbol pilot; NOT a point-in-time small-cap universe.
+symbols: [AEO, ASO, CROX, MTH, TNET, RHI, PATK, CALM]
+benchmarks: [SPY, IWM]
+duration: "2 Y"
+min_price_usd: 5.0
+min_adv20_usd: 5000000.0
+output_dir: "data/research/ibkr_daily_pilot"

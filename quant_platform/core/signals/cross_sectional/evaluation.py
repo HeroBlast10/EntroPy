@@ -110,11 +110,8 @@ def add_forward_returns(
 
     for p in periods:
         col_name = f"fwd_ret_{p}d"
-        df[col_name] = (
-            df.groupby(ticker_col)[price_col]
-            .pct_change(periods=p)
-            .shift(-p)  # align to current date (look forward)
-        )
+        future_price = df.groupby(ticker_col)[price_col].shift(-p)
+        df[col_name] = future_price / df[price_col] - 1.0
     return df
 
 
@@ -248,11 +245,8 @@ def ic_decay(
     results = []
     for h in range(1, max_lag + 1):
         fwd_col = f"_fwd_{h}"
-        prices_sub[fwd_col] = (
-            prices_sub.groupby(ticker_col)[price_col]
-            .pct_change(periods=h)
-            .shift(-h)
-        )
+        future_price = prices_sub.groupby(ticker_col)[price_col].shift(-h)
+        prices_sub[fwd_col] = future_price / prices_sub[price_col] - 1.0
         ic = compute_ic_series(prices_sub, factor_col, fwd_col, date_col, method="spearman")
         stats = ic_summary(ic)
         results.append({"horizon": h, "mean_ic": stats["mean_ic"], "icir": stats["icir"]})

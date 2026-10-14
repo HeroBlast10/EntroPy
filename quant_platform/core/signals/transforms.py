@@ -173,7 +173,11 @@ def neutralize(
             logger.warning("neutralize: column '{}' not in DataFrame, skipping", col)
             continue
 
-        if df[col].dtype == "object" or pd.api.types.is_categorical_dtype(df[col]):
+        if (
+            df[col].dtype == "object"
+            or isinstance(df[col].dtype, pd.CategoricalDtype)
+            or pd.api.types.is_string_dtype(df[col].dtype)
+        ):
             # Categorical: demean within (date, group)
             group_mean = df.groupby([date_col, col])[value_col].transform("mean")
             df[value_col] = df[value_col] - group_mean
@@ -197,8 +201,10 @@ def neutralize(
                 resid[mask] = ym - (alpha + beta * xm)
                 return pd.Series(resid, index=sub.index)
 
-            df[value_col] = df.groupby(date_col, group_keys=False).apply(
-                lambda g: _residualize(g)
-            )[value_col]
+            residuals = pd.Series(np.nan, index=df.index, dtype=float)
+            for _, sub in df.groupby(date_col, sort=False):
+                sub_resid = _residualize(sub)
+                residuals.loc[sub_resid.index] = sub_resid
+            df[value_col] = residuals
 
     return df

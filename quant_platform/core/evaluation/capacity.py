@@ -30,17 +30,26 @@ def capacity_analysis(
     tr = trades.copy()
     tr["date"] = pd.to_datetime(tr["date"])
     tr["shares"] = pd.to_numeric(tr["shares"], errors="coerce").abs().fillna(0.0)
+    tr["capacity_shares"] = pd.to_numeric(
+        tr.get("requested_shares", tr["shares"]), errors="coerce"
+    ).abs().fillna(0.0)
     tr["adv_shares"] = pd.to_numeric(tr.get("adv_shares", np.nan), errors="coerce").replace(0, np.nan)
     tr["price"] = pd.to_numeric(tr.get("price", np.nan), errors="coerce")
     tr["notional"] = pd.to_numeric(tr.get("notional", tr.get("notional_trade", np.nan)), errors="coerce")
+    tr["capacity_notional"] = pd.to_numeric(
+        tr.get("notional_trade", tr["notional"]), errors="coerce"
+    ).fillna(0.0)
     tr["portfolio_value_before_trade"] = pd.to_numeric(
         tr.get("portfolio_value_before_trade", np.nan),
         errors="coerce",
     )
 
-    tr["participation_rate"] = tr["shares"] / tr["adv_shares"]
+    # Capacity is based on desired order size, not the already-capped fill.
+    tr["participation_rate"] = tr["capacity_shares"] / tr["adv_shares"]
     tr["adv_dollar"] = tr["adv_shares"] * tr["price"]
-    tr["adv_notional_pct"] = tr["notional"] / tr["adv_dollar"].replace(0, np.nan)
+    tr["adv_notional_pct"] = (
+        tr["capacity_notional"] / tr["adv_dollar"].replace(0, np.nan)
+    )
     base_capital = _base_capital(tr)
 
     daily_participation = tr.groupby("date")["participation_rate"].max()
@@ -61,6 +70,7 @@ def capacity_analysis(
         "max_adv_notional_pct": float(tr["adv_notional_pct"].max()),
         "capacity_at_10pct_adv": float(capacity_10pct_adv) if pd.notna(capacity_10pct_adv) else np.nan,
         "total_traded_notional": float(tr["notional"].sum()),
+        "total_requested_notional": float(tr["capacity_notional"].sum()),
         "total_cost": float(pd.to_numeric(tr.get("total_cost", 0.0), errors="coerce").fillna(0.0).sum()),
     }])
 
@@ -88,15 +98,38 @@ def _capital_curve(
     for capital in capital_grid:
         scale = float(capital) / max(base_capital, 1.0)
         scaled = trades.copy()
-        scaled["shares"] = scaled["shares"] * scale
+        scaled["shares"] = scaled["capacity_shares"] * scale
         scaled["notional_trade"] = pd.to_numeric(
             scaled.get("notional_trade", scaled.get("notional", 0.0)),
             errors="coerce",
         ).fillna(0.0) * scale
-        costed = estimate_batch_costs(
-            scaled[["date", "ticker", "side", "shares", "price", "adv_shares", "daily_vol", "notional_trade"]].copy(),
-            cost_model,
+        scaled["daily_vol"] = pd.to_numeric(
+            scaled["daily_vol"], errors="coerce"
+        ).fillna(0.02)
+        estimable = (
+            scaled["shares"].gt(0)
+            & scaled["price"].gt(0)
+            & scaled["adv_shares"].gt(0)
         )
+        if estimable.any():
+            costed = estimate_batch_costs(
+                scaled.loc[
+                    estimable,
+                    [
+                        "date",
+                        "ticker",
+                        "side",
+                        "shares",
+                        "price",
+                        "adv_shares",
+                        "daily_vol",
+                        "notional_trade",
+                    ],
+                ].copy(),
+                cost_model,
+            )
+        else:
+            costed = pd.DataFrame(columns=["date", "total_cost", "notional"])
         total_cost = float(costed["total_cost"].sum())
         total_notional = float(costed["notional"].sum())
         daily_cost = costed.groupby("date")["total_cost"].sum()
@@ -108,16 +141,37 @@ def _capital_curve(
             if not isinstance(pnl.index, pd.DatetimeIndex):
                 pnl["date"] = pd.to_datetime(pnl["date"])
                 pnl = pnl.set_index("date")
-            cost_frac = daily_cost.reindex(pnl.index, fill_value=0.0) / max(float(capital), 1.0)
-            net = pnl["gross_ret"].fillna(0.0) - cost_frac
+            daily_cost_aligned = daily_cost.reindex(pnl.index, fill_value=0.0)
+            borrow_bps = pd.to_numeric(
+                pnl.get("borrow_cost_bps", 0.0), errors="coerce"
+            )
+            if not isinstance(borrow_bps, pd.Series):
+                borrow_bps = pd.Series(float(borrow_bps), index=pnl.index)
+            borrow_frac = borrow_bps.reindex(pnl.index, fill_value=0.0) / 10_000
+            nav = float(capital)
+            net_values = []
+            cost_fracs = []
+            total_borrow_cost = 0.0
+            for dt, gross_ret in pnl["gross_ret"].fillna(0.0).items():
+                prev_nav = nav
+                borrow_cost = prev_nav * float(borrow_frac.loc[dt])
+                trading_cost = float(daily_cost_aligned.loc[dt])
+                nav = prev_nav * (1.0 + float(gross_ret)) - borrow_cost - trading_cost
+                net_values.append(nav / prev_nav - 1.0)
+                cost_fracs.append((borrow_cost + trading_cost) / prev_nav)
+                total_borrow_cost += borrow_cost
+            net = pd.Series(net_values, index=pnl.index)
             net_sharpe = _sharpe(net, annualisation)
             net_ann_return = _ann_return(net, annualisation)
-            avg_daily_cost_bps = float(cost_frac.mean() * 10_000)
+            avg_daily_cost_bps = float(np.mean(cost_fracs) * 10_000)
+        else:
+            total_borrow_cost = np.nan
 
         rows.append({
             "capital": float(capital),
             "scale_vs_base": scale,
             "total_cost": total_cost,
+            "total_borrow_cost": total_borrow_cost,
             "total_notional": total_notional,
             "total_cost_bps": total_cost / max(total_notional, 1.0) * 10_000,
             "avg_daily_cost_bps": avg_daily_cost_bps,
@@ -150,4 +204,3 @@ def _sharpe(series: pd.Series, annualisation: int) -> float:
     if len(ret) < 2 or ret.std() <= 0:
         return np.nan
     return float(ret.mean() / ret.std() * np.sqrt(annualisation))
-

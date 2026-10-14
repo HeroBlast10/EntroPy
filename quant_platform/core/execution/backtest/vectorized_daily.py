@@ -1,29 +1,70 @@
-"""Trade generation and fill simulation.
+"""Close-to-close execution simulation with a stateful holdings ledger.
 
-Converts daily weight changes into a concrete trade list with:
-- Side (buy / sell)
-- Share quantities (from notional + price)
-- Fill prices (decision price ± slippage)
-- ADV and volatility for cost estimation
+The convention used throughout this module is:
 
-The execution model is intentionally simple (close-to-close) but
-realistic enough to demonstrate awareness of market microstructure.
+1. positions held after yesterday's close earn today's close-to-close return;
+2. borrow is charged on the marked short book;
+3. today's target is traded at today's close;
+4. trading costs are deducted after the fills.
+
+Consequently a target observed on date ``t`` never earns date ``t``'s return.
+The simulator also keeps actual holdings separate from targets, so holdings
+drift, missing prices, share rounding and participation limits are reflected
+in both turnover and subsequent PnL.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
-from quant_platform.core.execution.cost_models.us_equity import CostModel, estimate_batch_costs
+from quant_platform.core.execution.cost_models.us_equity import (
+    CostModel,
+    daily_borrow_cost,
+    estimate_batch_costs,
+)
 
 
-# ===================================================================
-# Weight-diff → trade list
-# ===================================================================
+_TRADE_COLUMNS = [
+    "ticker",
+    "side",
+    "weight_from",
+    "weight_to",
+    "delta_weight",
+    "notional_trade",
+    "requested_shares",
+    "shares",
+    "price",
+    "adv_shares",
+    "daily_vol",
+    "executed_notional",
+    "executed_delta_weight",
+    "fill_ratio",
+    "fill_status",
+]
+
+_COST_COLUMNS = [
+    "notional",
+    "commission",
+    "slippage",
+    "impact",
+    "sec_fee",
+    "finra_taf",
+    "stamp_duty",
+    "total_cost",
+    "total_cost_bps",
+]
+
+_INCOMPLETE_FILL_STATUSES = {
+    "partial",
+    "rejected_missing_price",
+    "rejected_no_liquidity",
+    "rejected_rounding",
+}
+
 
 def generate_trades(
     weights_today: pd.Series,
@@ -32,184 +73,454 @@ def generate_trades(
     adv_today: pd.Series,
     vol_today: pd.Series,
     capital: float,
+    max_participation_rate: Optional[float] = None,
 ) -> pd.DataFrame:
-    """Convert weight changes into a trade list for one date.
+    """Convert target-minus-actual weights into executable orders.
 
-    Parameters
-    ----------
-    weights_today : target weights indexed by ticker.
-    weights_yesterday : previous weights (``None`` on the first day).
-    prices_today : close prices indexed by ticker.
-    adv_today : average daily volume (shares) indexed by ticker.
-    vol_today : annualised daily volatility indexed by ticker.
-    capital : current portfolio value in dollars.
-
-    Returns
-    -------
-    DataFrame with columns:
-        ``ticker, side, weight_from, weight_to, delta_weight,
-        notional_trade, shares, price, adv_shares, daily_vol``
+    ``weights_yesterday`` means the *actual pre-trade* weights, rather than
+    yesterday's stale target.  Rejected and partial orders remain in the
+    returned table with an explicit ``fill_status``; callers must update
+    holdings using ``executed_notional`` only.
     """
-    if weights_yesterday is None:
-        weights_yesterday = pd.Series(dtype=float)
+    if not np.isfinite(capital) or capital <= 0:
+        raise ValueError("capital must be finite and positive")
+    if max_participation_rate is not None and not 0 < max_participation_rate <= 1:
+        raise ValueError("max_participation_rate must be in (0, 1]")
 
-    # Align to common ticker set
-    all_tickers = weights_today.index.union(weights_yesterday.index)
-    w_new = weights_today.reindex(all_tickers, fill_value=0.0)
-    w_old = weights_yesterday.reindex(all_tickers, fill_value=0.0)
-    delta = w_new - w_old
-
-    # Drop zero changes
+    target = pd.to_numeric(weights_today, errors="coerce").fillna(0.0)
+    actual = (
+        pd.Series(dtype=float)
+        if weights_yesterday is None
+        else pd.to_numeric(weights_yesterday, errors="coerce").fillna(0.0)
+    )
+    all_tickers = target.index.union(actual.index)
+    w_new = target.reindex(all_tickers, fill_value=0.0)
+    w_old = actual.reindex(all_tickers, fill_value=0.0)
+    delta = (w_new - w_old)
     delta = delta[delta.abs() > 1e-10]
     if delta.empty:
-        return pd.DataFrame(columns=[
-            "ticker", "side", "weight_from", "weight_to", "delta_weight",
-            "notional_trade", "shares", "price", "adv_shares", "daily_vol",
-        ])
+        return pd.DataFrame(columns=_TRADE_COLUMNS)
 
-    trades = pd.DataFrame({
-        "ticker": delta.index,
-        "weight_from": w_old.reindex(delta.index, fill_value=0.0).values,
-        "weight_to": w_new.reindex(delta.index, fill_value=0.0).values,
-        "delta_weight": delta.values,
-    })
-
+    trades = pd.DataFrame(
+        {
+            "ticker": delta.index,
+            "weight_from": w_old.reindex(delta.index, fill_value=0.0).to_numpy(),
+            "weight_to": w_new.reindex(delta.index, fill_value=0.0).to_numpy(),
+            "delta_weight": delta.to_numpy(),
+        }
+    )
     trades["side"] = np.where(trades["delta_weight"] > 0, "buy", "sell")
-    trades["notional_trade"] = (trades["delta_weight"].abs() * capital)
-    trades["price"] = prices_today.reindex(trades["ticker"], fill_value=np.nan).values
-    trades["price"] = trades["price"].replace([np.inf, -np.inf], np.nan)
-    trades["shares"] = np.where(
-        trades["price"] > 0,
-        (trades["notional_trade"] / trades["price"]).round(0),
-        0.0,
-    )
-    trades["adv_shares"] = (
-        adv_today.reindex(trades["ticker"], fill_value=1e6)
-        .replace([np.inf, -np.inf], np.nan)
-        .fillna(1e6)
-        .values
-    )
+    trades["notional_trade"] = trades["delta_weight"].abs() * capital
+
+    trades["price"] = pd.to_numeric(
+        prices_today.reindex(trades["ticker"]).reset_index(drop=True),
+        errors="coerce",
+    ).replace([np.inf, -np.inf], np.nan)
+    trades["adv_shares"] = pd.to_numeric(
+        adv_today.reindex(trades["ticker"]).reset_index(drop=True),
+        errors="coerce",
+    ).replace([np.inf, -np.inf], np.nan)
     trades["daily_vol"] = (
-        vol_today.reindex(trades["ticker"], fill_value=0.02)
+        pd.to_numeric(
+            vol_today.reindex(trades["ticker"]).reset_index(drop=True),
+            errors="coerce",
+        )
         .replace([np.inf, -np.inf], np.nan)
         .fillna(0.02)
-        .values
+        .clip(lower=0.0)
     )
 
-    return trades.reset_index(drop=True)
+    valid_price = trades["price"].gt(0) & trades["price"].notna()
+    requested = np.zeros(len(trades), dtype=float)
+    requested[valid_price.to_numpy()] = np.floor(
+        trades.loc[valid_price, "notional_trade"]
+        / trades.loc[valid_price, "price"]
+    )
+    trades["requested_shares"] = requested
+    trades["shares"] = requested
+    trades["fill_status"] = "filled"
+    trades.loc[~valid_price, ["requested_shares", "shares"]] = 0.0
+    trades.loc[~valid_price, "fill_status"] = "rejected_missing_price"
+
+    rounded_zero = valid_price & trades["requested_shares"].le(0)
+    trades.loc[rounded_zero, "fill_status"] = "rejected_rounding"
+
+    if max_participation_rate is not None:
+        valid_adv = trades["adv_shares"].gt(0) & trades["adv_shares"].notna()
+        no_liquidity = valid_price & ~rounded_zero & ~valid_adv
+        trades.loc[no_liquidity, "shares"] = 0.0
+        trades.loc[no_liquidity, "fill_status"] = "rejected_no_liquidity"
+
+        eligible = valid_price & ~rounded_zero & valid_adv
+        max_shares = np.floor(
+            trades.loc[eligible, "adv_shares"] * max_participation_rate
+        )
+        executed = np.minimum(trades.loc[eligible, "requested_shares"], max_shares)
+        trades.loc[eligible, "shares"] = executed
+        zero_capacity = eligible & trades["shares"].le(0)
+        trades.loc[zero_capacity, "fill_status"] = "rejected_no_liquidity"
+        partial = eligible & trades["shares"].gt(0) & (
+            trades["shares"] < trades["requested_shares"]
+        )
+        trades.loc[partial, "fill_status"] = "partial"
+
+    trades["executed_notional"] = (
+        trades["shares"] * trades["price"].fillna(0.0)
+    )
+    direction = np.where(trades["side"].eq("buy"), 1.0, -1.0)
+    trades["executed_delta_weight"] = (
+        direction * trades["executed_notional"] / capital
+    )
+    trades["fill_ratio"] = np.where(
+        trades["requested_shares"] > 0,
+        trades["shares"] / trades["requested_shares"],
+        0.0,
+    )
+    return trades[_TRADE_COLUMNS].reset_index(drop=True)
 
 
-# ===================================================================
-# Full execution simulation across all dates
-# ===================================================================
+def _attach_costs(trades: pd.DataFrame, model: CostModel) -> pd.DataFrame:
+    """Attach zero costs to rejects and estimated costs to actual fills."""
+    result = trades.copy()
+    for column in _COST_COLUMNS:
+        result[column] = 0.0
+    executable = (
+        result["shares"].gt(0)
+        & result["price"].gt(0)
+        & result["price"].notna()
+    )
+    if executable.any():
+        costed = estimate_batch_costs(result.loc[executable, _TRADE_COLUMNS], model)
+        result.loc[executable, _COST_COLUMNS] = costed[_COST_COLUMNS].to_numpy()
+    return result
+
+
+def _empty_trades() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=["date", *_TRADE_COLUMNS, *_COST_COLUMNS, "portfolio_value_before_trade"]
+    )
+
+
+def _empty_pending_orders() -> pd.DataFrame:
+    """Return an empty ticker-indexed residual-order book."""
+    return pd.DataFrame(
+        columns=["side", "target_position_value"],
+        index=pd.Index([], name="ticker"),
+    )
+
+
+def _residual_orders_after_fills(
+    orders: pd.DataFrame,
+    capital: float,
+    prior_pending: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """Build the next residual-order book from this attempt's fill results.
+
+    Residuals retain each ticker's dollar position target from the original
+    rebalance, rather than refreshing portfolio target weights.  Thus a
+    blocked name may be retried without causing unrelated, already-filled
+    holdings to be rebalanced after drift.
+    """
+    if orders.empty:
+        return _empty_pending_orders()
+
+    next_rows: list[dict[str, object]] = []
+    for row in orders.itertuples(index=False):
+        if row.fill_status not in _INCOMPLETE_FILL_STATUSES:
+            continue
+        if prior_pending is None:
+            side = str(row.side)
+            target_position_value = float(row.weight_to) * capital
+        else:
+            target_position_value = float(
+                prior_pending.loc[row.ticker, "target_position_value"]
+            )
+            side = str(prior_pending.loc[row.ticker, "side"])
+        next_rows.append(
+            {
+                "ticker": row.ticker,
+                "side": side,
+                "target_position_value": target_position_value,
+            }
+        )
+    if not next_rows:
+        return _empty_pending_orders()
+    return pd.DataFrame(next_rows).set_index("ticker")
+
+
+def _generate_residual_trades(
+    pending: pd.DataFrame,
+    actual_weights: pd.Series,
+    prices_today: pd.Series,
+    adv_today: pd.Series,
+    vol_today: pd.Series,
+    capital: float,
+    max_participation_rate: Optional[float],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Generate orders only for ticker-level residual instructions."""
+    tickers = pending.index
+    actual = actual_weights.reindex(tickers, fill_value=0.0)
+    current_position_value = actual * capital
+    target_position_value = pending["target_position_value"].astype(float)
+    residual_value = target_position_value - current_position_value
+    side = pending["side"]
+    if (~side.isin(["buy", "sell"])).any():
+        raise ValueError("pending order side must be 'buy' or 'sell'")
+    active = (
+        (side.eq("buy") & residual_value.gt(1e-8))
+        | (side.eq("sell") & residual_value.lt(-1e-8))
+    )
+    active_pending = pending.loc[active].copy()
+    if active_pending.empty:
+        return pd.DataFrame(columns=_TRADE_COLUMNS), _empty_pending_orders()
+    active_tickers = active_pending.index
+    retry_target = (
+        active_pending["target_position_value"].astype(float) / capital
+    )
+    orders = generate_trades(
+        weights_today=retry_target,
+        weights_yesterday=actual.reindex(active_tickers),
+        prices_today=prices_today,
+        adv_today=adv_today,
+        vol_today=vol_today,
+        capital=capital,
+        max_participation_rate=max_participation_rate,
+    )
+    return orders, active_pending
+
 
 def simulate_execution(
     daily_weights: pd.DataFrame,
     prices: pd.DataFrame,
     cost_model: Optional[CostModel] = None,
     initial_capital: float = 1_000_000.0,
-    adv_lookback: int = 20,
+    adv_lookback: Optional[int] = None,
     vol_lookback: int = 20,
-) -> pd.DataFrame:
-    """Simulate trade execution across the entire backtest period.
+    return_daily_ledger: bool = False,
+) -> Union[pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
+    """Simulate fills and PnL under a close-target convention.
 
-    Parameters
-    ----------
-    daily_weights : ``[date, ticker, weight]`` — one row per holding per day.
-    prices : ``[date, ticker, close, adj_close, volume]`` from the data layer.
-    cost_model : transaction cost parameters.
-    initial_capital : starting portfolio value.
-    adv_lookback : days for ADV computation.
-    vol_lookback : days for volatility computation.
+    If ``daily_weights`` contains ``is_rebalance``, trades are submitted only
+    on flagged dates (plus subsequent retries for unfilled orders).  Without
+    that column, the first date and dates where the target vector changes are
+    treated as rebalance dates.
 
-    Returns
-    -------
-    DataFrame of all trades with cost breakdowns, one row per trade.
-    Columns include everything from :func:`generate_trades` plus
-    cost columns from :func:`estimate_batch_costs`.
+    The default return value remains the historical trade DataFrame.  Set
+    ``return_daily_ledger=True`` to also receive the authoritative daily PnL
+    ledger.  The same ledger is stored in ``trades.attrs["daily_ledger"]`` for
+    backward-compatible callers.
     """
     if cost_model is None:
         cost_model = CostModel()
+    if adv_lookback is None:
+        adv_lookback = int(cost_model.adv_lookback)
+    if adv_lookback <= 0:
+        raise ValueError("adv_lookback must be positive")
+    if initial_capital <= 0 or not np.isfinite(initial_capital):
+        raise ValueError("initial_capital must be finite and positive")
+    required_weights = {"date", "ticker", "weight"}
+    required_prices = {"date", "ticker", "adj_close"}
+    if missing := required_weights.difference(daily_weights.columns):
+        raise ValueError(f"daily_weights missing columns: {sorted(missing)}")
+    if missing := required_prices.difference(prices.columns):
+        raise ValueError(f"prices missing columns: {sorted(missing)}")
 
-    daily_weights = daily_weights.copy()
-    prices = prices.copy()
-    daily_weights["date"] = pd.to_datetime(daily_weights["date"])
-    prices["date"] = pd.to_datetime(prices["date"])
+    dw = daily_weights.copy()
+    px = prices.copy()
+    dw["date"] = pd.to_datetime(dw["date"])
+    px["date"] = pd.to_datetime(px["date"])
+    dw["weight"] = pd.to_numeric(dw["weight"], errors="coerce").fillna(0.0)
+    if dw.duplicated(["date", "ticker"]).any():
+        raise ValueError("daily_weights must have at most one row per date/ticker")
+    if px.duplicated(["date", "ticker"]).any():
+        raise ValueError("prices must have at most one row per date/ticker")
 
-    # Pre-compute ADV and rolling vol per (ticker, date)
-    prices_sorted = prices.sort_values(["ticker", "date"])
-
-    adv = (
-        prices_sorted.groupby("ticker")["volume"]
-        .transform(lambda s: s.rolling(adv_lookback, min_periods=5).mean())
+    px = px.sort_values(["ticker", "date"]).copy()
+    px["stock_ret"] = px.groupby("ticker", sort=False)["adj_close"].pct_change()
+    if "volume" in px:
+        volume = pd.to_numeric(px["volume"], errors="coerce")
+        px["adv_shares"] = volume.groupby(px["ticker"], sort=False).transform(
+            lambda s: s.rolling(adv_lookback, min_periods=1).mean().shift(1)
+        )
+    else:
+        px["adv_shares"] = np.nan
+    px["daily_vol"] = px.groupby("ticker", sort=False)["stock_ret"].transform(
+        lambda s: s.rolling(vol_lookback, min_periods=2).std().shift(1)
     )
-    prices_sorted["adv_shares"] = adv
+    px_lookup = px.set_index(["date", "ticker"]).sort_index()
+    available_dates = set(px["date"].unique())
 
-    ret = prices_sorted.groupby("ticker")["adj_close"].transform(lambda s: s.pct_change())
-    prices_sorted["stock_ret"] = ret
-    daily_vol = ret.groupby(prices_sorted["ticker"]).transform(
-        lambda s: s.rolling(vol_lookback, min_periods=5).std()
-    )
-    prices_sorted["daily_vol"] = daily_vol
+    dates = pd.DatetimeIndex(sorted(dw["date"].unique()), name="date")
+    if len(dates) == 0:
+        empty = _empty_trades()
+        ledger = pd.DataFrame(index=dates)
+        empty.attrs["daily_ledger"] = ledger
+        return (empty, ledger) if return_daily_ledger else empty
 
-    # Build lookup: (date, ticker) → price / adv / vol
-    px_lookup = prices_sorted.set_index(["date", "ticker"])
-
-    dates = sorted(daily_weights["date"].unique())
-    all_trades: list[pd.DataFrame] = []
-    prev_weights: Optional[pd.Series] = None
-    capital = initial_capital
+    positions = pd.Series(dtype=float)  # signed close-market values
+    last_target: Optional[pd.Series] = None
+    pending_orders = _empty_pending_orders()
+    nav_net = float(initial_capital)
+    nav_gross = float(initial_capital)
+    peak_net = nav_net
+    peak_gross = nav_gross
+    trade_frames: list[pd.DataFrame] = []
+    ledger_rows: list[dict] = []
 
     for dt in dates:
-        w_today = daily_weights.loc[daily_weights["date"] == dt].set_index("ticker")["weight"]
+        group = dw.loc[dw["date"].eq(dt)]
+        target = group.set_index("ticker")["weight"].sort_index()
+        explicit_rebalance = (
+            bool(group["is_rebalance"].fillna(False).astype(bool).any())
+            if "is_rebalance" in group
+            else None
+        )
+        if explicit_rebalance is None:
+            aligned_target = target
+            if last_target is None:
+                is_rebalance = True
+            else:
+                idx = target.index.union(last_target.index)
+                is_rebalance = not np.allclose(
+                    target.reindex(idx, fill_value=0.0),
+                    last_target.reindex(idx, fill_value=0.0),
+                    atol=1e-12,
+                    rtol=0.0,
+                )
+        else:
+            is_rebalance = explicit_rebalance
+        last_target = target.copy()
 
-        # Get prices for today
-        if dt not in px_lookup.index.get_level_values(0):
-            prev_weights = w_today
-            continue
+        prev_nav = nav_net
+        if dt in available_dates:
+            px_today = px_lookup.loc[dt]
+            if isinstance(px_today, pd.Series):
+                px_today = px_today.to_frame().T
+            day_ret = pd.to_numeric(
+                px_today["stock_ret"].reindex(positions.index), errors="coerce"
+            ).fillna(0.0)
+            pnl_dollar = float((positions * day_ret).sum())
+            positions = positions * (1.0 + day_ret)
+            price_column = "close" if "close" in px_today else "adj_close"
+            price_series = pd.to_numeric(px_today[price_column], errors="coerce")
+            adv_series = pd.to_numeric(px_today["adv_shares"], errors="coerce")
+            vol_series = pd.to_numeric(px_today["daily_vol"], errors="coerce")
+        else:
+            pnl_dollar = 0.0
+            price_series = pd.Series(dtype=float)
+            adv_series = pd.Series(dtype=float)
+            vol_series = pd.Series(dtype=float)
 
-        px_today = px_lookup.loc[dt]
+        gross_ret = pnl_dollar / prev_nav if prev_nav else 0.0
+        nav_before_borrow = prev_nav + pnl_dollar
+        short_notional = float(-positions[positions < 0].sum())
+        borrow_cost = daily_borrow_cost(short_notional, cost_model)
+        capital_before_trade = nav_before_borrow - borrow_cost
+        if capital_before_trade <= 0:
+            raise RuntimeError(f"portfolio NAV became non-positive on {dt.date()}")
+        actual_weights = positions / capital_before_trade
 
-        price_series = px_today["close"] if "close" in px_today.columns else pd.Series(dtype=float)
-        adv_series = px_today["adv_shares"] if "adv_shares" in px_today.columns else pd.Series(dtype=float)
-        vol_series = px_today["daily_vol"] if "daily_vol" in px_today.columns else pd.Series(dtype=float)
+        trading_cost = 0.0
+        requested_notional = 0.0
+        executed_notional = 0.0
+        should_submit = is_rebalance or not pending_orders.empty
+        if should_submit:
+            if is_rebalance:
+                # A new target supersedes all stale residual instructions.
+                pending_orders = _empty_pending_orders()
+                orders = generate_trades(
+                    weights_today=target,
+                    weights_yesterday=actual_weights,
+                    prices_today=price_series,
+                    adv_today=adv_series,
+                    vol_today=vol_series,
+                    capital=capital_before_trade,
+                    max_participation_rate=cost_model.max_participation_rate,
+                )
+                prior_pending = None
+            else:
+                orders, prior_pending = _generate_residual_trades(
+                    pending=pending_orders,
+                    actual_weights=actual_weights,
+                    prices_today=price_series,
+                    adv_today=adv_series,
+                    vol_today=vol_series,
+                    capital=capital_before_trade,
+                    max_participation_rate=cost_model.max_participation_rate,
+                )
+            if not orders.empty:
+                orders = _attach_costs(orders, cost_model)
+                orders.insert(0, "date", dt)
+                orders["portfolio_value_before_trade"] = capital_before_trade
+                trade_frames.append(orders)
+                trading_cost = float(orders["total_cost"].sum())
+                requested_notional = float(orders["notional_trade"].sum())
+                executed_notional = float(orders["executed_notional"].sum())
+                signed_execution = np.where(
+                    orders["side"].eq("buy"),
+                    orders["executed_notional"],
+                    -orders["executed_notional"],
+                )
+                position_change = pd.Series(
+                    signed_execution, index=orders["ticker"]
+                ).groupby(level=0).sum()
+                positions = positions.add(position_change, fill_value=0.0)
+                positions = positions[positions.abs() > 1e-8]
+                pending_orders = _residual_orders_after_fills(
+                    orders,
+                    capital=capital_before_trade,
+                    prior_pending=prior_pending,
+                )
+            else:
+                pending_orders = _empty_pending_orders()
 
-        if prev_weights is not None and "stock_ret" in px_today.columns:
-            day_ret = px_today["stock_ret"].reindex(prev_weights.index).fillna(0.0)
-            portfolio_ret = float((prev_weights * day_ret).sum())
-            capital *= (1.0 + portfolio_ret)
-
-        trades = generate_trades(
-            weights_today=w_today,
-            weights_yesterday=prev_weights,
-            prices_today=price_series,
-            adv_today=adv_series,
-            vol_today=vol_series,
-            capital=capital,
+        nav_net = capital_before_trade - trading_cost
+        if nav_net <= 0:
+            raise RuntimeError(f"portfolio NAV became non-positive on {dt.date()}")
+        nav_gross *= 1.0 + gross_ret
+        peak_net = max(peak_net, nav_net)
+        peak_gross = max(peak_gross, nav_gross)
+        actual_after = positions / nav_net
+        ledger_rows.append(
+            {
+                "date": dt,
+                "gross_ret": gross_ret,
+                "net_ret": nav_net / prev_nav - 1.0,
+                "trading_cost_dollar": trading_cost,
+                "borrow_cost_dollar": borrow_cost,
+                "total_cost_dollar": trading_cost + borrow_cost,
+                "trading_cost_bps": trading_cost / prev_nav * 10_000,
+                "borrow_cost_bps": borrow_cost / prev_nav * 10_000,
+                "requested_turnover": requested_notional / capital_before_trade,
+                "executed_turnover": executed_notional / capital_before_trade,
+                "nav_gross": nav_gross,
+                "nav_net": nav_net,
+                "drawdown_gross": nav_gross / peak_gross - 1.0,
+                "drawdown_net": nav_net / peak_net - 1.0,
+                "gross_exposure": float(actual_after.abs().sum()),
+                "net_exposure": float(actual_after.sum()),
+                "short_exposure": float(-actual_after[actual_after < 0].sum()),
+                "is_rebalance": is_rebalance,
+                "has_pending_orders": not pending_orders.empty,
+            }
         )
 
-        if not trades.empty:
-            trades_with_costs = estimate_batch_costs(trades, cost_model)
-            trades_with_costs.insert(0, "date", dt)
-            trades_with_costs["portfolio_value_before_trade"] = capital
-            all_trades.append(trades_with_costs)
-
-            # Update capital by subtracting trading costs after mark-to-market PnL.
-            total_cost = trades_with_costs["total_cost"].sum()
-            capital -= total_cost
-
-        prev_weights = w_today
-
-    if not all_trades:
-        logger.warning("No trades generated across the backtest period")
-        return pd.DataFrame()
-
-    result = pd.concat(all_trades, ignore_index=True)
-    logger.info(
-        "Execution: {} trades across {} days, total cost = ${:,.0f} ({:.1f} bps avg)",
-        len(result),
-        result["date"].nunique(),
-        result["total_cost"].sum(),
-        result["total_cost_bps"].mean(),
+    trades = (
+        pd.concat(trade_frames, ignore_index=True)
+        if trade_frames
+        else _empty_trades()
     )
-    return result
+    ledger = pd.DataFrame(ledger_rows).set_index("date")
+    trades.attrs["daily_ledger"] = ledger
+    if trades.empty:
+        logger.warning("No trades generated across the backtest period")
+    else:
+        logger.info(
+            "Execution: {} orders ({} filled/partial) across {} days, "
+            "trading cost=${:,.0f}",
+            len(trades),
+            int(trades["shares"].gt(0).sum()),
+            trades["date"].nunique(),
+            trades["total_cost"].sum(),
+        )
+    return (trades, ledger) if return_daily_ledger else trades

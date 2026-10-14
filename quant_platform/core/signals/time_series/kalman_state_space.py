@@ -45,8 +45,8 @@ def _kalman_filter_1d(prices, q00, q01, q10, q11, r, a00, a01, a10, a11, h0, h1)
         # Predict covariance: P_pred = A @ P @ A^T + Q
         t00 = a00 * p00 + a01 * p10; t01 = a00 * p01 + a01 * p11
         t10 = a10 * p00 + a11 * p10; t11 = a10 * p01 + a11 * p11
-        pp00 = t00 * a00 + t01 * a10 + q00; pp01 = t00 * a01 + t01 * a11 + q01
-        pp10 = t10 * a00 + t11 * a10 + q10; pp11 = t10 * a01 + t11 * a11 + q11
+        pp00 = t00 * a00 + t01 * a01 + q00; pp01 = t00 * a10 + t01 * a11 + q01
+        pp10 = t10 * a00 + t11 * a01 + q10; pp11 = t10 * a10 + t11 * a11 + q11
 
         # Innovation covariance: S = H @ P_pred @ H^T + R
         hp0 = h0 * pp00 + h1 * pp10; hp1 = h0 * pp01 + h1 * pp11
@@ -122,21 +122,21 @@ def _run_kalman_on_panel(
     all_prices_list = []
     lengths = []
 
-    # per-ticker normalisation ranges for rescaling
-    mins = []
-    ranges = []
+    # Scale by information available at the beginning of each series.
+    # Full-sample min/max normalisation made historical states depend on
+    # future extrema because Q/R are specified in normalised units.
+    scales = []
 
     for _ticker, grp in df.groupby("ticker", sort=False):
         p = grp["adj_close"].values.astype(np.float64)
-        pmin = p.min()
-        prange = p.max() - pmin
-        if prange == 0.0:
-            prange = 1.0
-        p_norm = (p - pmin) / prange
+        finite = p[np.isfinite(p)]
+        scale = abs(finite[0]) if len(finite) else 1.0
+        if scale < 1e-12:
+            scale = 1.0
+        p_norm = p / scale
         all_prices_list.append(p_norm)
         lengths.append(len(p_norm))
-        mins.append(pmin)
-        ranges.append(prange)
+        scales.append(scale)
 
     all_prices = np.concatenate(all_prices_list)
     lengths_arr = np.array(lengths, dtype=np.int64)
@@ -161,9 +161,9 @@ def _run_kalman_on_panel(
     offset = 0
     for idx, n in enumerate(lengths):
         sl = slice(offset, offset + n)
-        filtered[sl] = filtered_norm[sl] * ranges[idx] + mins[idx]
-        velocity[sl] = velocity_norm[sl] * ranges[idx]
-        raw_prices[sl] = all_prices[sl] * ranges[idx] + mins[idx]
+        filtered[sl] = filtered_norm[sl] * scales[idx]
+        velocity[sl] = velocity_norm[sl] * scales[idx]
+        raw_prices[sl] = all_prices[sl] * scales[idx]
         offset += n
 
     return df, filtered, velocity, kg, raw_prices

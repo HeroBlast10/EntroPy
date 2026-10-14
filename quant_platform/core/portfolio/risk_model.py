@@ -40,6 +40,7 @@ class FactorRiskModel:
         # Factor covariance
         self.cov_matrix_: Optional[np.ndarray] = None
         self.factor_names_: Optional[List[str]] = None
+        self.intercepts_: Optional[pd.Series] = None
         
         # Factor exposures (betas)
         self.exposures_: Optional[pd.DataFrame] = None  # [ticker, factor] → beta
@@ -83,7 +84,7 @@ class FactorRiskModel:
         )
         
         logger.info(
-            "Factor risk model fit: %d factors, %d stocks, condition number %.1f",
+            "Factor risk model fit: {} factors, {} stocks, condition number {:.1f}",
             len(self.factor_names_),
             len(self.exposures_),
             np.linalg.cond(self.cov_matrix_),
@@ -111,21 +112,23 @@ class FactorRiskModel:
         factor_ret = factor_returns.loc[common_dates]
         
         exposures = []
+        intercepts = {}
         
         for ticker in stock_ret.columns:
-            y = stock_ret[ticker].dropna()
-            
-            # Align factor returns to stock dates
-            X = factor_ret.loc[y.index]
-            
-            if len(y) < 20:  # Need minimum observations
+            aligned = pd.concat(
+                [stock_ret[ticker].rename("_stock"), factor_ret], axis=1
+            ).replace([np.inf, -np.inf], np.nan).dropna()
+            if len(aligned) < 20:
                 continue
+            y = aligned["_stock"]
+            X = aligned[factor_ret.columns]
             
             # OLS regression: y = X @ beta + epsilon
             try:
                 # Add intercept
                 X_with_const = np.column_stack([np.ones(len(X)), X.values])
                 beta = np.linalg.lstsq(X_with_const, y.values, rcond=None)[0]
+                intercepts[ticker] = float(beta[0])
                 
                 # Store betas (exclude intercept)
                 exposure_dict = {"ticker": ticker}
@@ -134,9 +137,10 @@ class FactorRiskModel:
                 
                 exposures.append(exposure_dict)
             except np.linalg.LinAlgError:
-                logger.warning("Regression failed for %s", ticker)
+                logger.warning("Regression failed for {}", ticker)
                 continue
         
+        self.intercepts_ = pd.Series(intercepts, dtype=float)
         if not exposures:
             return pd.DataFrame()
         
@@ -150,13 +154,18 @@ class FactorRiskModel:
         -------
         Covariance matrix (K × K) where K = number of factors
         """
-        n = len(factor_returns)
+        clean_returns = factor_returns.replace(
+            [np.inf, -np.inf], np.nan
+        ).dropna()
+        n = len(clean_returns)
+        if n < 2:
+            raise ValueError("Need at least two complete factor-return rows")
         alpha = 1 - np.exp(-np.log(2) / self.halflife)
         weights = np.array([(1 - alpha) ** (n - 1 - i) for i in range(n)])
         weights /= weights.sum()
 
         # Weighted sample covariance
-        data = factor_returns.values
+        data = clean_returns.values
         mean = np.average(data, axis=0, weights=weights)
         centered = data - mean
         sample_cov = (centered.T * weights) @ centered
@@ -165,7 +174,9 @@ class FactorRiskModel:
         diag = np.diag(np.diag(sample_cov))
         cov = (1 - self.shrinkage) * sample_cov + self.shrinkage * diag
         
-        return cov
+        # Inputs are daily returns; store annualized covariance so it is in
+        # the same units as ``specific_risk_`` below.
+        return cov * 252.0
     
     def _estimate_specific_risk(
         self,
@@ -191,14 +202,24 @@ class FactorRiskModel:
             if ticker not in stock_ret.columns:
                 continue
             
-            y = stock_ret[ticker].dropna()
-            X = factor_ret.loc[y.index]
+            aligned = pd.concat(
+                [stock_ret[ticker].rename("_stock"), factor_ret], axis=1
+            ).replace([np.inf, -np.inf], np.nan).dropna()
+            if len(aligned) < 2:
+                continue
+            y = aligned["_stock"]
+            X = aligned[factor_ret.columns]
             
             # Get exposures for this stock
             betas = exposures.loc[ticker].values
             
             # Predicted return from factors
-            y_pred = X.values @ betas
+            intercept = (
+                float(self.intercepts_.get(ticker, 0.0))
+                if self.intercepts_ is not None
+                else 0.0
+            )
+            y_pred = intercept + X.values @ betas
             
             # Residuals
             residuals = y.values - y_pred
@@ -226,9 +247,17 @@ class FactorRiskModel:
         if self.cov_matrix_ is None:
             raise RuntimeError("Must call fit() first.")
         
-        # This is a simplified version - for full decomposition use decompose_risk()
-        w = weights.values if isinstance(weights, pd.Series) else weights
-        return float(w @ self.cov_matrix_ @ w)
+        if not isinstance(weights, pd.Series):
+            if self.exposures_ is None or len(weights) != len(self.exposures_):
+                raise ValueError(
+                    "Array weights must match fitted exposures; prefer a ticker-indexed Series"
+                )
+            weights = pd.Series(weights, index=self.exposures_.index)
+        decomposition = self.decompose_risk(weights)
+        return float(
+            decomposition["factor_variance"]
+            + decomposition["specific_variance"]
+        )
     
     def decompose_risk(
         self,
@@ -256,9 +285,17 @@ class FactorRiskModel:
         if self.exposures_ is None or self.specific_risk_ is None:
             raise RuntimeError("Must call fit() first.")
         
-        # Align weights to stocks with exposures
-        common_tickers = weights.index.intersection(self.exposures_.index)
-        w = weights.loc[common_tickers]
+        active_weights = weights[weights.abs() > 1e-12]
+        missing = active_weights.index.difference(
+            self.exposures_.index.intersection(self.specific_risk_.index)
+        )
+        if len(missing):
+            raise ValueError(
+                "Risk model has no complete exposure/specific-risk estimate for: "
+                + ", ".join(map(str, missing[:10]))
+            )
+        common_tickers = active_weights.index
+        w = active_weights
         
         if len(w) == 0:
             return {

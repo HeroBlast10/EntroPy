@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional, Type
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -26,8 +27,21 @@ from quant_platform.core.utils.io import load_config, resolve_data_path, save_pa
 class FactorRegistry:
     """Central registry for all alpha factors."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        quality_warn_thresholds: Optional[Dict[str, float]] = None,
+        reject_quality_warnings: bool = False,
+    ) -> None:
         self._registry: Dict[str, Type[FactorBase]] = {}
+        self.last_quality_report = pd.DataFrame()
+        self._quality_warn_thresholds = {
+            "min_coverage": 0.05,
+            "min_nonconstant_date_ratio": 0.20,
+            "max_dominant_value_ratio": 0.95,
+            **(quality_warn_thresholds or {}),
+        }
+        self._reject_quality_warnings = bool(reject_quality_warnings)
 
     # ------------------------------------------------------------------
     # Registration
@@ -172,6 +186,7 @@ class FactorRegistry:
         # Create base table from prices
         base = prices[["date", "ticker"]].copy()
         factor_series: Dict[str, pd.Series] = {}
+        quality_rows: List[Dict[str, object]] = []
         
         for name in names:
             cls = self.get(name)
@@ -192,16 +207,47 @@ class FactorRegistry:
                 
                 # Merge factor values into base
                 factor_name = factor_col[0]
+                quality = self._factor_quality(
+                    factor_df,
+                    factor_name,
+                    expected_rows=len(base),
+                )
+                quality["factor"] = factor_name
+                quality_rows.append(quality)
+                if quality.get("severity") == "warning":
+                    logger.warning(
+                        "Factor {} quality warning: {}",
+                        factor_name,
+                        quality["reason"],
+                    )
+                if not quality["accepted"]:
+                    logger.error(
+                        "Factor {} rejected by quality gate: {}",
+                        factor_name,
+                        quality["reason"],
+                    )
+                    continue
                 merged_temp = base.merge(
                     factor_df[["date", "ticker", factor_name]],
                     on=["date", "ticker"],
-                    how="left"
+                    how="left",
+                    validate="one_to_one",
                 )
                 factor_series[factor_name] = merged_temp[factor_name]
                 
             except Exception as exc:
                 logger.error("Factor {} failed: {}", name, exc)
+                quality_rows.append({
+                    "factor": name,
+                    "accepted": False,
+                    "reason": f"exception: {exc}",
+                    "coverage": 0.0,
+                    "n_finite": 0,
+                    "n_unique": 0,
+                })
                 continue
+
+        self.last_quality_report = pd.DataFrame(quality_rows)
         
         if not factor_series:
             raise RuntimeError("All factor computations failed.")
@@ -222,6 +268,105 @@ class FactorRegistry:
         logger.info("Computed {} factors → {} rows × {} cols",
                      len(factor_series), len(result), len(result.columns) - 2)
         return result
+
+    def _factor_quality(
+        self,
+        factor_df: pd.DataFrame,
+        factor_name: str,
+        *,
+        expected_rows: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Return a fail-closed quality assessment for one factor output."""
+        required = {"date", "ticker", factor_name}
+        missing = required - set(factor_df.columns)
+        if missing:
+            return {
+                "accepted": False,
+                "reason": f"missing columns: {sorted(missing)}",
+                "coverage": 0.0,
+                "n_finite": 0,
+                "n_unique": 0,
+            }
+        if factor_df.duplicated(["date", "ticker"]).any():
+            return {
+                "accepted": False,
+                "reason": "duplicate (date, ticker) keys",
+                "coverage": 0.0,
+                "n_finite": 0,
+                "n_unique": 0,
+            }
+
+        values = pd.to_numeric(factor_df[factor_name], errors="coerce")
+        finite = np.isfinite(values.to_numpy(dtype=float))
+        n_finite = int(finite.sum())
+        denominator = expected_rows if expected_rows is not None else len(values)
+        coverage = float(n_finite / denominator) if denominator else 0.0
+        n_unique = int(values[finite].nunique(dropna=True)) if n_finite else 0
+        if n_finite == 0:
+            accepted, reason, severity = False, "no finite observations", "error"
+        elif n_unique < 2:
+            accepted, reason, severity = False, "constant factor", "error"
+        else:
+            finite_frame = factor_df.loc[finite, ["date", factor_name]].copy()
+            date_stats = finite_frame.groupby("date")[factor_name].agg(
+                ["count", "nunique"]
+            )
+            eligible_dates = date_stats["count"] >= 2
+            nonconstant_date_ratio = (
+                float((date_stats.loc[eligible_dates, "nunique"] >= 2).mean())
+                if eligible_dates.any() else np.nan
+            )
+            dominant_value_ratio = float(
+                values[finite].value_counts(normalize=True, dropna=True).iloc[0]
+            )
+            finite_std = float(values[finite].std(ddof=0))
+            finite_mean = float(values[finite].mean())
+            near_zero_variance = bool(
+                finite_std <= 1e-12 * max(1.0, abs(finite_mean))
+            )
+
+            warnings = []
+            thresholds = self._quality_warn_thresholds
+            if coverage < thresholds["min_coverage"]:
+                warnings.append(f"low coverage={coverage:.3f}")
+            if (
+                np.isfinite(nonconstant_date_ratio)
+                and nonconstant_date_ratio
+                < thresholds["min_nonconstant_date_ratio"]
+            ):
+                warnings.append(
+                    "mostly constant cross-sections="
+                    f"{nonconstant_date_ratio:.3f}"
+                )
+            if dominant_value_ratio > thresholds["max_dominant_value_ratio"]:
+                warnings.append(
+                    f"dominant value ratio={dominant_value_ratio:.3f}"
+                )
+            if near_zero_variance:
+                warnings.append("near-zero global variance")
+
+            severity = "warning" if warnings else "ok"
+            accepted = not (warnings and self._reject_quality_warnings)
+            reason = "; ".join(warnings) if warnings else "ok"
+            if warnings and self._reject_quality_warnings:
+                severity = "error"
+        return {
+            "accepted": accepted,
+            "reason": reason,
+            "severity": severity,
+            "coverage": coverage,
+            "n_finite": n_finite,
+            "n_unique": n_unique,
+            "nonconstant_date_ratio": (
+                nonconstant_date_ratio if n_finite and n_unique >= 2 else np.nan
+            ),
+            "dominant_value_ratio": (
+                dominant_value_ratio if n_finite and n_unique >= 2 else np.nan
+            ),
+            "near_zero_variance": (
+                near_zero_variance if n_finite and n_unique >= 2 else True
+            ),
+        }
 
     # ------------------------------------------------------------------
     # Persistence

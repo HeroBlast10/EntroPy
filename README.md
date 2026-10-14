@@ -4,13 +4,13 @@
 
 **Production-oriented multi-factor equity research platform**
 
-EntroPy tests whether state-space, regime, entropy, mean-reversion, and classic cross-sectional factors can produce robust, cost-aware, capacity-aware equity alpha under point-in-time data discipline and rolling out-of-sample validation.
+EntroPy tests whether state-space, regime, entropy, mean-reversion, and classic cross-sectional factors can produce robust, cost-aware, capacity-aware equity alpha with explicit data provenance and rolling out-of-sample validation.
 
 [中文说明](README.zh-CN.md) | [Upgrade Notes](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md) | [Factor Dictionary](docs/factor_dictionary_beginner.md)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-202%20passed-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-297%20passed-brightgreen.svg)](#testing)
 [![Factors](https://img.shields.io/badge/factors-42%20registered-orange.svg)](#signal-library)
 
 </div>
@@ -236,7 +236,7 @@ quant_platform/
 ├── experiments/                # Experiment YAML configs
 ├── notebooks/                  # ★ factor_research_walkthrough.ipynb (end-to-end demo)
 ├── scripts/                    # CLI entry points
-├── tests/                      # 202 unit and regression tests
+├── tests/                      # 297 unit and regression tests
 └── docs/                       # Design docs + Factor Dictionary for Beginners
 ```
 
@@ -252,6 +252,7 @@ quant_platform/
 | `python scripts/run_factor_pipeline.py` | Run factor-to-report pipeline |
 | `python scripts/run_experiment.py` | Run YAML-defined experiment |
 | `python scripts/tune_factors.py` | Run factor parameter tuning |
+| `python scripts/evaluate_nonlinear_alpha.py` | Train and compare purged walk-forward LightGBM/MLP alphas |
 
 ## Jupyter Notebook Walkthrough
 
@@ -271,6 +272,27 @@ cd notebooks
 jupyter notebook factor_research_walkthrough.ipynb
 ```
 
+## IBKR Paper Connection and Daily Research
+
+Start IB Gateway in paper mode on port `4002`. The default profile in
+`config/ibkr_paper.yaml` is read-only, dry-run, and has automatic orders disabled.
+No login credentials belong in the repository.
+
+```bash
+python scripts/ibkr_diagnose.py --connect --history
+python scripts/ibkr_daily_research.py
+python scripts/ibkr_daily_research.py --offline
+```
+
+The daily pilot caches two years of vendor bars for eight fixed stock symbols
+and two benchmarks, validates complete trading sessions, and reports momentum,
+volatility, and liquidity features under `data/research/ibkr_daily_pilot/`.
+This sample is not a point-in-time small-cap universe or a validated trading
+strategy. Generated data, local account diagnostics, and logs stay untracked.
+The separate `config/ibkr_paper_order_preview.yaml` enables a readwrite client
+while retaining dry-run and disabled order submission; broker permissions and
+actual order execution require separate verification.
+
 ## Testing
 
 ```bash
@@ -278,15 +300,16 @@ python -m compileall quant_platform scripts
 pytest -q
 ```
 
-Latest verified result:
+Latest verified result (Python 3.12, 2026-10-14):
 
 ```text
-202 passed   # 172 original + 30 new tests for upgrades
+297 passed
 ```
 
 ## Known Limitations
 
-- The default US universe approximates large-cap index membership using dynamic market-cap and liquidity filters; it is not official historical S&P 500 membership.
+- The default `research` data contract starts from today's US constituents and may use non-PIT yfinance fundamental snapshots. Rows are now explicitly tagged (`membership_is_point_in_time`, `is_point_in_time`) and must not be reported as survivorship-free/PIT.
+- `production` mode fails closed unless a historical membership interval file (`ticker`, `membership_start`, `membership_end`) and publication-date-based PIT fundamentals are supplied.
 - Daily OHLCV data cannot capture intraday execution and microstructure effects.
 - The factor risk model is intentionally compact compared with commercial Barra models.
 - White Reality Check and Deflated Sharpe are lightweight approximations intended for research hygiene, not a full academic replication package.
@@ -296,6 +319,7 @@ Latest verified result:
 ## Documentation
 
 - [Production Factor Research Upgrade](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md)
+- [Non-linear Alpha Research (LightGBM + MLP)](NONLINEAR_ALPHA_RESEARCH_2026_07.md)
 - [Factor Dictionary for Beginners](docs/factor_dictionary_beginner.md) ← **New** — explains every factor intuitively
 - [Data Dictionary](docs/data_dictionary.md)
 - [Factor Dictionary](docs/factor_dictionary.md)

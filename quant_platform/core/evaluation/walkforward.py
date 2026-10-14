@@ -7,19 +7,20 @@ Implements a basic rolling train/test scheme for sanity checking:
                                               |--- train_months ---|--- ...
 
 For each fold:
-1. Compute IC on the **training** window to validate signal has predictive power.
-2. Build a fixed top-quintile long-only portfolio on the **test** window.
-3. Record OOS performance metrics.
+1. Compute IC on the **training** window and, when configured, select the
+   top-K factors using training data only.
+2. Freeze an equal-weight effective-factor composite for the test window.
+3. Build a fixed top-quintile long-only portfolio on the **test** window.
+4. Record OOS performance metrics.
 
 LIMITATIONS (not a full walk-forward framework):
-- Does NOT perform factor selection within each fold
 - Does NOT tune parameters (e.g., quantile thresholds, lookback windows)
 - Does NOT freeze/retrain models per fold
 - Portfolio construction is fixed (top quintile, equal weight)
 
 This is a simplified OOS sanity check to verify the signal has some predictive
 power out-of-sample. For production use, extend to include:
-- Cross-validated factor selection
+- Nested validation for the factor-count/selection rule
 - Hyperparameter optimization on validation set
 - Model retraining per fold
 """
@@ -44,6 +45,15 @@ class WalkForwardConfig:
     step_months: int = 12           # how far to roll between folds
     min_train_obs: int = 100        # minimum trading days in training set
     factor_select_top_k: Optional[int] = None  # if set, pick top K by IC
+    purge_days: int = 1             # exclude labels ending in/after test start
+
+    def __post_init__(self) -> None:
+        if self.train_months <= 0 or self.test_months <= 0 or self.step_months <= 0:
+            raise ValueError("train/test/step months must be positive")
+        if self.min_train_obs <= 0:
+            raise ValueError("min_train_obs must be positive")
+        if self.purge_days < 1:
+            raise ValueError("purge_days must be at least one for fwd_ret_1d")
 
 
 # ===================================================================
@@ -73,6 +83,11 @@ def generate_folds(
 
         train_idx = all_dates[(all_dates >= train_start) & (all_dates <= train_end)]
         test_idx = all_dates[(all_dates >= test_start) & (all_dates <= test_end)]
+        if len(test_idx) > 0:
+            test_start_pos = int(all_dates.searchsorted(test_idx[0]))
+            allowed_end = max(0, test_start_pos - config.purge_days)
+            allowed_train_dates = all_dates[:allowed_end]
+            train_idx = train_idx[train_idx.isin(allowed_train_dates)]
 
         if len(train_idx) >= config.min_train_obs and len(test_idx) > 0:
             folds.append((train_idx, test_idx))
@@ -109,10 +124,7 @@ def _evaluate_fold(
     prices["date"] = pd.to_datetime(prices["date"])
 
     # Forward returns for IC calc
-    prices_sorted = prices.sort_values(["ticker", "date"])
-    prices_sorted["fwd_ret_1d"] = prices_sorted.groupby("ticker")["adj_close"].transform(
-        lambda s: s.pct_change().shift(-1)
-    )
+    prices_sorted = _add_calendar_forward_return(prices)
     directions = _infer_factor_directions([c for c in factor_df.columns if c not in ("date", "ticker")])
 
     # --- Training period ---
@@ -204,7 +216,11 @@ def _evaluate_fold(
     oos_df = pd.DataFrame(oos_returns).set_index("date")["ret"]
     ann_ret = (1 + oos_df).prod() ** (252 / max(len(oos_df), 1)) - 1
     ann_vol = oos_df.std() * np.sqrt(252) if oos_df.std() > 0 else np.nan
-    sharpe = ann_ret / ann_vol if ann_vol and ann_vol > 0 else np.nan
+    sharpe = (
+        float(oos_df.mean() / oos_df.std(ddof=1) * np.sqrt(252))
+        if len(oos_df) > 1 and oos_df.std(ddof=1) > 0
+        else np.nan
+    )
     cum = (1 + oos_df).cumprod()
     max_dd = (cum / cum.cummax() - 1).min()
 
@@ -222,6 +238,29 @@ def _evaluate_fold(
         "selected_factors": ",".join(selected_factors),
         "train_selected_mean_ic": float(np.nanmean(list(train_scores.values()))) if train_scores else train_ic_stats.get("mean_ic", np.nan),
     }
+
+
+def _add_calendar_forward_return(prices: pd.DataFrame) -> pd.DataFrame:
+    """Attach a one-trading-day forward return without skipping suspensions."""
+
+    base = prices.copy()
+    calendar = pd.DatetimeIndex(base["date"].dropna().unique()).sort_values()
+    mapping = pd.DataFrame({
+        "date": calendar,
+        "_label_date": pd.Series(calendar, index=calendar).shift(-1).to_numpy(),
+    })
+    base = base.merge(mapping, on="date", how="left", validate="many_to_one")
+    future = prices[["date", "ticker", "adj_close"]].rename(
+        columns={"date": "_label_date", "adj_close": "_future_adj_close"}
+    )
+    base = base.merge(
+        future,
+        on=["_label_date", "ticker"],
+        how="left",
+        validate="many_to_one",
+    )
+    base["fwd_ret_1d"] = base["_future_adj_close"] / base["adj_close"] - 1.0
+    return base.sort_values(["ticker", "date"])
 
 
 def _select_top_factors(

@@ -1,0 +1,21 @@
+# Exact direct dependencies required by the test suite on Python 3.12.
+# Optional production surfaces (PyTorch, Streamlit, IBKR, SimFin, BaoStock)
+# stay in requirements-lock.txt but are intentionally excluded from CI so a
+# unit-test job does not download multi-gigabyte CUDA wheels.
+
+pandas==2.2.2
+pyarrow==16.1.0
+numpy==1.26.4
+scipy==1.13.1
+PyYAML==6.0.1
+yfinance==0.2.65
+exchange-calendars==4.13.1
+numba==0.60.0
+matplotlib==3.9.2
+tqdm==4.66.5
+loguru==0.7.3
+click==8.3.1
+xxhash==3.6.0
+scikit-learn==1.5.1
+lightgbm==4.6.0
+pytest==8.4.2

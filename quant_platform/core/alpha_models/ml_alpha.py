@@ -69,6 +69,39 @@ def _infer_feature_directions(feature_cols: List[str]) -> Dict[str, int]:
         return {}
 
 
+def _align_factors_and_returns(
+    factors: pd.DataFrame,
+    forward_returns: pd.Series,
+) -> pd.DataFrame:
+    """Attach targets without allowing ambiguous positional alignment."""
+
+    result = factors.copy()
+    if isinstance(forward_returns.index, pd.MultiIndex):
+        required_names = {"date", "ticker"}
+        if not required_names.issubset(set(forward_returns.index.names)):
+            raise ValueError("forward_returns MultiIndex must be named date and ticker")
+        target = forward_returns.rename("forward_return").reset_index()
+        if target.duplicated(["date", "ticker"]).any():
+            raise ValueError("forward_returns contains duplicate date/ticker keys")
+        if result.duplicated(["date", "ticker"]).any():
+            raise ValueError("factors contains duplicate date/ticker keys")
+        return result.merge(
+            target[["date", "ticker", "forward_return"]],
+            on=["date", "ticker"],
+            how="inner",
+            validate="one_to_one",
+        )
+
+    if not forward_returns.index.equals(result.index):
+        raise ValueError(
+            "Non-MultiIndex forward_returns must have exactly the same index as factors"
+        )
+    if result.index.has_duplicates:
+        raise ValueError("factors/forward_returns row index must be unique")
+    result["forward_return"] = forward_returns.reindex(result.index)
+    return result
+
+
 # ===================================================================
 # Purged K-Fold Cross-Validation (Lopez de Prado)
 # ===================================================================
@@ -91,9 +124,22 @@ class PurgedKFold:
         Percentage of samples to embargo after each test set (default 0.01 = 1%)
     """
     
-    def __init__(self, n_splits: int = 5, embargo_pct: float = 0.01):
+    def __init__(
+        self,
+        n_splits: int = 5,
+        embargo_pct: float = 0.01,
+        *,
+        horizon: int = 1,
+        purge_days: Optional[int] = None,
+    ):
+        if horizon <= 0:
+            raise ValueError("horizon must be positive")
+        if purge_days is not None and purge_days < horizon:
+            raise ValueError("purge_days must be at least horizon")
         self.n_splits = n_splits
         self.embargo_pct = embargo_pct
+        self.horizon = horizon
+        self.purge_days = horizon if purge_days is None else purge_days
     
     def split(self, X: pd.DataFrame, y: pd.Series = None) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Generate train/test indices with purging and embargo.
@@ -111,26 +157,48 @@ class PurgedKFold:
         ------
         train_idx, test_idx : arrays of indices
         """
-        n = len(X)
-        # Divide data into (n_splits + 1) segments so the first segment
-        # is always available for training.
-        test_size = n // (self.n_splits + 1)
-        embargo_size = max(1, int(n * self.embargo_pct))
-        
-        indices = np.arange(n)
+        if self.n_splits <= 0:
+            raise ValueError("n_splits must be positive")
+        if not 0.0 <= self.embargo_pct < 1.0:
+            raise ValueError("embargo_pct must be in [0, 1)")
+
+        if isinstance(X.index, pd.MultiIndex) and "date" in X.index.names:
+            row_dates = pd.DatetimeIndex(X.index.get_level_values("date"))
+        elif isinstance(X.index, pd.DatetimeIndex):
+            row_dates = pd.DatetimeIndex(X.index)
+        elif "date" in X.columns:
+            row_dates = pd.DatetimeIndex(pd.to_datetime(X["date"]))
+        else:
+            raise ValueError("PurgedKFold requires a DatetimeIndex or a date column")
+
+        unique_dates = row_dates.unique().sort_values()
+        # Divide unique dates, never flattened security rows, into segments.
+        test_size = len(unique_dates) // (self.n_splits + 1)
+        if test_size <= 0:
+            raise ValueError("Not enough unique dates for the requested n_splits")
+        embargo_size = max(
+            self.purge_days,
+            int(np.ceil(len(unique_dates) * self.embargo_pct)),
+        )
         
         for i in range(self.n_splits):
             # Test set: segments 1 .. n_splits
             test_start = (i + 1) * test_size
-            test_end = test_start + test_size if i < self.n_splits - 1 else n
-            test_idx = indices[test_start:test_end]
+            test_end = (
+                test_start + test_size
+                if i < self.n_splits - 1
+                else len(unique_dates)
+            )
+            test_dates = unique_dates[test_start:test_end]
             
             # Train set: all data before test set, minus embargo gap
             train_end = max(0, test_start - embargo_size)
             if train_end <= 0:
                 continue  # Skip if no training data
             
-            train_idx = indices[:train_end]
+            train_dates = unique_dates[:train_end]
+            train_idx = np.flatnonzero(row_dates.isin(train_dates))
+            test_idx = np.flatnonzero(row_dates.isin(test_dates))
             
             yield train_idx, test_idx
 
@@ -179,6 +247,7 @@ class MLAlphaModel:
         # Model and scaler
         self.model_ = None
         self.scaler_ = StandardScaler()
+        self.feature_fill_values_: Optional[pd.Series] = None
         
         # Feature importance
         self.feature_importance_: Optional[pd.Series] = None
@@ -229,13 +298,9 @@ class MLAlphaModel:
             if isinstance(factors.index, pd.MultiIndex):
                 factors = factors.reset_index()
         
-        # Align factors and returns via merge (handles MultiIndex returns)
-        factors = factors.copy()
-        if isinstance(forward_returns.index, pd.MultiIndex):
-            fr_df = forward_returns.rename("forward_return").reset_index()
-            factors = factors.merge(fr_df, on=["date", "ticker"], how="inner")
-        else:
-            factors["forward_return"] = forward_returns.values
+        # Align by explicit keys (or an exactly matching row index).  Assigning
+        # Series.values here would silently shuffle labels after reindexing.
+        factors = _align_factors_and_returns(factors, forward_returns)
         factors = factors.dropna(subset=["forward_return"])
         
         if len(factors) == 0:
@@ -250,14 +315,6 @@ class MLAlphaModel:
         factors = _apply_effective_ml_features(factors, feature_cols)
         factors = factors.dropna(subset=feature_cols)
         if len(factors) == 0:
-            return {
-                "mean_r2": np.nan,
-                "std_r2": np.nan,
-                "mean_ic": np.nan,
-                "std_ic": np.nan,
-                "n_splits": 0,
-            }
-        if len(factors) == 0:
             logger.warning("No valid training data after effective feature transform")
             return self
         self.feature_names_ = feature_cols
@@ -267,10 +324,21 @@ class MLAlphaModel:
         
         # Sort by date
         factors = factors.sort_values("date")
+        if dates is not None:
+            requested_dates = pd.DatetimeIndex(pd.to_datetime(dates))
+            factors = factors[factors["date"].isin(requested_dates)]
+        if self.lookback is not None and self.lookback > 0 and not factors.empty:
+            available_dates = pd.DatetimeIndex(factors["date"].unique()).sort_values()
+            keep_dates = available_dates[-self.lookback :]
+            factors = factors[factors["date"].isin(keep_dates)]
+        if factors.empty:
+            logger.warning("No valid training data after date/lookback filtering")
+            return self
         
         # Use all data for training (expanding window)
         X = factors[feature_cols].values
         y = factors["forward_return"].values
+        self.feature_fill_values_ = factors[feature_cols].median().fillna(0.5)
         
         # Standardize features
         X_scaled = self.scaler_.fit_transform(X)
@@ -286,7 +354,7 @@ class MLAlphaModel:
         ).abs().sort_values(ascending=False)
         
         logger.info(
-            "ML alpha model fit: %s, %d samples, %d features, R²=%.3f",
+            "ML alpha model fit: {}, {} samples, {} features, R²={:.3f}",
             self.model_type,
             len(X),
             len(feature_cols),
@@ -319,7 +387,12 @@ class MLAlphaModel:
         
         # Extract features
         factors = _apply_effective_ml_features(factors.copy(), feature_cols)
-        factors[feature_cols] = factors[feature_cols].fillna(0.0)
+        fill_values = (
+            self.feature_fill_values_
+            if self.feature_fill_values_ is not None
+            else pd.Series(0.5, index=feature_cols)
+        )
+        factors[feature_cols] = factors[feature_cols].fillna(fill_values)
         X = factors[feature_cols].values
         
         # Standardize
@@ -365,6 +438,8 @@ class MLAlphaModel:
         forward_returns: pd.Series,
         n_splits: int = 5,
         embargo_pct: float = 0.01,
+        horizon: int = 1,
+        purge_days: Optional[int] = None,
     ) -> Dict[str, float]:
         """Perform purged K-fold cross-validation.
         
@@ -383,13 +458,9 @@ class MLAlphaModel:
         """
         # Prepare data — merge via date/ticker to handle MultiIndex returns
         factors = factors.copy()
-        if isinstance(forward_returns.index, pd.MultiIndex):
-            fr_df = forward_returns.rename("forward_return").reset_index()
-            if "date" not in factors.columns and isinstance(factors.index, pd.MultiIndex):
-                factors = factors.reset_index()
-            factors = factors.merge(fr_df, on=["date", "ticker"], how="inner")
-        else:
-            factors["forward_return"] = forward_returns.values
+        if "date" not in factors.columns and isinstance(factors.index, pd.MultiIndex):
+            factors = factors.reset_index()
+        factors = _align_factors_and_returns(factors, forward_returns)
         factors = factors.dropna(subset=["forward_return"])
         
         feature_cols = [
@@ -408,7 +479,12 @@ class MLAlphaModel:
         y = factors["forward_return"]
         
         # Purged K-Fold
-        pkf = PurgedKFold(n_splits=n_splits, embargo_pct=embargo_pct)
+        pkf = PurgedKFold(
+            n_splits=n_splits,
+            embargo_pct=embargo_pct,
+            horizon=horizon,
+            purge_days=purge_days,
+        )
         
         r2_scores = []
         ic_scores = []
@@ -429,9 +505,22 @@ class MLAlphaModel:
             r2 = model.score(X_test_scaled, y_test)
             r2_scores.append(r2)
             
-            # Information Coefficient (Spearman correlation)
+            # Average daily cross-sectional RankIC; a pooled correlation over
+            # security-date rows is not a cross-sectional alpha metric.
             y_pred = model.predict(X_test_scaled)
-            ic = pd.Series(y_test.values).corr(pd.Series(y_pred), method="spearman")
+            evaluation = pd.DataFrame({
+                "date": pd.to_datetime(X_test.index),
+                "actual": y_test.to_numpy(),
+                "prediction": y_pred,
+            })
+            daily_values = []
+            for _, group in evaluation.groupby("date", sort=True):
+                valid = group[["actual", "prediction"]].dropna()
+                if len(valid) >= 5:
+                    daily_values.append(
+                        valid["actual"].corr(valid["prediction"], method="spearman")
+                    )
+            ic = float(pd.Series(daily_values, dtype=float).mean()) if daily_values else np.nan
             ic_scores.append(ic)
         
         return {
@@ -439,7 +528,7 @@ class MLAlphaModel:
             "std_r2": np.std(r2_scores),
             "mean_ic": np.mean(ic_scores),
             "std_ic": np.std(ic_scores),
-            "n_splits": n_splits,
+            "n_splits": len(r2_scores),
         }
 
 
@@ -473,11 +562,21 @@ class WalkForwardMLAlpha:
         alpha: float = 1.0,
         refit_freq: int = 21,
         min_train_periods: int = 252,
+        horizon: int = 1,
+        purge_days: Optional[int] = None,
     ):
+        if refit_freq <= 0 or min_train_periods <= 0:
+            raise ValueError("refit_freq and min_train_periods must be positive")
+        if horizon <= 0:
+            raise ValueError("horizon must be positive")
+        if purge_days is not None and purge_days < horizon:
+            raise ValueError("purge_days must be at least horizon")
         self.model_type = model_type
         self.alpha = alpha
         self.refit_freq = refit_freq
         self.min_train_periods = min_train_periods
+        self.horizon = horizon
+        self.purge_days = horizon if purge_days is None else purge_days
         
         self.models_: Dict[pd.Timestamp, MLAlphaModel] = {}
         self.feature_importance_history_: List[pd.Series] = []
@@ -506,6 +605,10 @@ class WalkForwardMLAlpha:
                 factors = factors.reset_index()
         
         factors["date"] = pd.to_datetime(factors["date"])
+        if not isinstance(forward_returns.index, pd.MultiIndex):
+            raise ValueError(
+                "WalkForwardMLAlpha requires date/ticker MultiIndex forward_returns"
+            )
         
         # Get unique dates
         dates = sorted(factors["date"].unique())
@@ -516,7 +619,7 @@ class WalkForwardMLAlpha:
         
         for i, date in enumerate(dates):
             # Check if we have enough training data
-            if i < self.min_train_periods:
+            if i < self.min_train_periods + self.purge_days:
                 continue
             
             # Check if we need to refit
@@ -527,8 +630,9 @@ class WalkForwardMLAlpha:
             )
             
             if should_refit:
-                # Train on all data up to (but not including) current date
-                train_dates = dates[:i]
+                # A training label is usable only when its complete horizon
+                # precedes the current prediction date.
+                train_dates = dates[: i - self.purge_days]
                 train_data = factors[factors["date"].isin(train_dates)]
                 train_returns = forward_returns[
                     forward_returns.index.get_level_values("date").isin(train_dates)
@@ -538,8 +642,11 @@ class WalkForwardMLAlpha:
                 current_model = MLAlphaModel(
                     model_type=self.model_type,
                     alpha=self.alpha,
+                    lookback=len(train_dates),
                 )
                 current_model.fit(train_data, train_returns)
+                if current_model.model_ is None:
+                    raise RuntimeError("ML alpha refit produced no usable model")
                 
                 # Store model and feature importance
                 self.models_[date] = current_model
@@ -550,7 +657,7 @@ class WalkForwardMLAlpha:
                 last_refit_date = date
                 
                 logger.info(
-                    "Retrained ML alpha model on %s (train size: %d)",
+                    "Retrained ML alpha model on {} (train size: {})",
                     date.strftime("%Y-%m-%d"),
                     len(train_data),
                 )
