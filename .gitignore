@@ -10,12 +10,17 @@ build/
 data/*.parquet
 data/**/*.parquet
 data/**/*.csv
+data/**/*.json
+data/**/*.html
 data/manifest.json
 data/backtest/
 data/portfolio/
 data/factors/
 data/reports/
 data/live/
+data/experiments/
+data/fundamentals/
+data/research/
 
 # Keep the data directory structure
 !data/.gitkeep
@@ -29,6 +34,11 @@ simfin_data/
 
 # Pytest
 .pytest_cache/
+.pytest_tmp/
+.pytest_*/
+.pytest_*.xml
+.pytest_*.log
+.universe_build.*.log
 htmlcov/
 .coverage
 
@@ -49,6 +59,7 @@ venv/
 .venv/
 
 # Implementation notes / interview prep docs (not for public repo)
+local_docs/
 ACCURACY_FIXES_SUMMARY.md
 BENCHMARK_IMPLEMENTATION.md
 BUGFIX_SUMMARY.md
@@ -60,3 +71,6 @@ ML_ALPHA_IMPLEMENTATION.md
 RESUME_AND_INTERVIEW_PREP.md
 VALUE_QUALITY_IMPLEMENTATION.md
 VAR_CVAR_IMPLEMENTATION.md
+
+# Project docs
+docs/

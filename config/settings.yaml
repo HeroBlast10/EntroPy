@@ -13,7 +13,7 @@ paths:
 # --- Date Range ---
 date_range:
   start: "2010-01-01"
-  end: "2024-12-31"
+  end: "2026-07-21"
 
 # --- Exchange / Calendar ---
 exchange:
@@ -22,7 +22,12 @@ exchange:
 
 # --- Universe Filters ---
 universe:
-  index_membership: "sp500"        # ticker universe: "sp500" or custom list
+  # "sp500" downloads today's constituents only.  It is a research seed and
+  # must not be interpreted as historical point-in-time membership.
+  index_membership: "sp500"
+  # Optional CSV/Parquet with ticker,membership_start,membership_end.
+  # Required when data_contract.mode is "production".
+  membership_file: null
   min_listing_days: 60             # exclude stocks listed < N trading days
   min_price: 1.0                   # exclude penny stocks (close < $1)
   min_market_cap: 5.0e+7           # $50M minimum market cap
@@ -39,7 +44,7 @@ universe:
 adjustment:
   # "split_only" = only adjust for splits (no dividend reinvestment)
   # "total_return" = adjust for splits + dividends
-  method: "split_only"
+  method: "total_return"
   # point_in_time: use the adjustment factor known AS OF each date
   # (avoids look-ahead bias from retroactive corrections)
   point_in_time: true
@@ -48,7 +53,7 @@ adjustment:
 fundamentals:
   # SimFin dataset variant: "free" or "plus"
   simfin_variant: "free"
-  # API key (set via env var SIMFIN_API_KEY or paste here for local use)
+  # API key: set SIMFIN_API_KEY in the environment; never commit credentials.
   simfin_api_key: null
   # Which statements to pull
   statements:
@@ -57,6 +62,13 @@ fundamentals:
     - "cashflow"
   # Lag (calendar days) to apply after report_date to avoid look-ahead bias
   publication_lag_days: 45
+
+# --- Data Provenance Contract ---
+data_contract:
+  # The bundled/default data is suitable for exploratory research but is not
+  # fully PIT because current-constituent and yfinance fallbacks may be used.
+  mode: "research"                  # "research" or fail-closed "production"
+  allow_non_pit_fundamentals: true # ignored (forced false) in production
 
 # --- Data Versioning ---
 versioning:

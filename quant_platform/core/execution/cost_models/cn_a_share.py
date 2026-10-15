@@ -49,11 +49,18 @@ class AShareCostModel:
 
         Returns cost as fraction of NAV (not in CNY).
         """
+        if not np.isfinite(nav) or nav <= 0:
+            raise ValueError("nav must be finite and positive")
         delta_w = weight_new - weight_prev
         abs_delta = np.abs(delta_w)
         trade_value = abs_delta * nav
 
-        commission = abs_delta * self.commission_rate
+        commission_dollar = np.where(
+            trade_value > 0,
+            np.maximum(trade_value * self.commission_rate, self.min_commission),
+            0.0,
+        )
+        commission = commission_dollar / nav
         sell_mask = (delta_w < 0).astype(np.float64)
         stamp = np.abs(delta_w) * sell_mask * self.stamp_tax_rate
         transfer = abs_delta * self.transfer_fee_rate
@@ -86,7 +93,12 @@ class AShareCostModel:
             participation = trade_value / adv_value
             return self.slippage_k * np.sqrt(np.clip(participation, 0, 1)) * abs_delta
         elif self.slippage_model == "volatility" and volatility is not None:
-            return self.slippage_k * volatility * np.sqrt(abs_delta)
+            return (
+                self.slippage_k
+                * volatility
+                * np.sqrt(abs_delta)
+                * abs_delta
+            )
         return abs_delta * (self.slippage_bps / 10000.0)
 
     def summary(self) -> str:

@@ -13,6 +13,7 @@ Supports both **long-only** and **long-short** modes.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Optional
 
 import numpy as np
@@ -49,25 +50,76 @@ class QuantilePortfolio(PortfolioConstructor):
 
         # --- Today's cross-section ---
         sig_today = signal.loc[signal["date"] == date, ["ticker", sig_col]].copy()
-        uni_today = universe.loc[universe["date"] == date, "ticker"]
-        tradable = set(uni_today)
+        uni_today = universe.loc[universe["date"] == date].copy()
+        if "pass_all_filters" in uni_today.columns:
+            uni_today = uni_today.loc[
+                uni_today["pass_all_filters"].fillna(False).astype(bool)
+            ]
+        tradable = set(uni_today["ticker"])
         sig_today = sig_today[sig_today["ticker"].isin(tradable)].dropna(subset=[sig_col])
 
         if sig_today.empty:
             return pd.Series(dtype=float)
 
         sig_today = sig_today.set_index("ticker")[sig_col]
+        if sig_today.index.has_duplicates:
+            raise ValueError("signal contains duplicate ticker rows on rebalance date")
+        tie_key = pd.Series(
+            [
+                int.from_bytes(
+                    hashlib.blake2b(
+                        str(ticker).encode("utf-8"),
+                        digest_size=8,
+                        person=b"EntroPy",
+                    ).digest(),
+                    byteorder="big",
+                )
+                for ticker in sig_today.index
+            ],
+            index=sig_today.index,
+            dtype="uint64",
+        )
+        ordered = pd.DataFrame(
+            {"signal": sig_today, "tie_key": tie_key}
+        )
 
         # --- Top-N override ---
         if cfg.top_n is not None:
-            long_tickers = sig_today.nlargest(cfg.top_n).index
-            short_tickers = sig_today.nsmallest(cfg.top_n).index if \
-                cfg.mode == PortfolioMode.LONG_SHORT else pd.Index([])
+            long_tickers = ordered.sort_values(
+                ["signal", "tie_key"],
+                ascending=[False, True],
+            ).head(cfg.top_n).index
+            short_tickers = (
+                ordered.sort_values(
+                    ["signal", "tie_key"],
+                    ascending=[True, True],
+                ).head(cfg.top_n).index
+                if cfg.mode == PortfolioMode.LONG_SHORT
+                else pd.Index([])
+            )
         else:
             # --- Quantile assignment ---
+            # A fixed hash is an input-order-independent secondary key.  It
+            # avoids systematically favouring ticker/file order when a model
+            # (especially a tree ensemble) emits tied scores.
             try:
-                q_labels = pd.qcut(sig_today.rank(method="first"), cfg.n_quantiles,
-                                   labels=False, duplicates="drop") + 1
+                stable_order = ordered.sort_values(
+                    ["signal", "tie_key"],
+                    ascending=[True, True],
+                ).index
+                stable_rank = pd.Series(
+                    np.arange(1, len(stable_order) + 1),
+                    index=stable_order,
+                ).reindex(sig_today.index)
+                q_labels = (
+                    pd.qcut(
+                        stable_rank,
+                        cfg.n_quantiles,
+                        labels=False,
+                        duplicates="drop",
+                    )
+                    + 1
+                )
             except ValueError:
                 return pd.Series(dtype=float)
 
@@ -120,20 +172,33 @@ class QuantilePortfolio(PortfolioConstructor):
             # Try to get market_cap from universe
             uni_today = universe.loc[universe["date"] == date]
             if "market_cap" in uni_today.columns:
-                mcap = uni_today.set_index("ticker")["market_cap"].reindex(tickers)
-                mcap = mcap.fillna(mcap.median())  # fallback for missing
-                mcap = mcap.clip(lower=1.0)
-                w = mcap / mcap.sum()
+                mcap = pd.to_numeric(
+                    uni_today.set_index("ticker")["market_cap"].reindex(tickers),
+                    errors="coerce",
+                )
+                valid = mcap.replace([np.inf, -np.inf], np.nan).dropna()
+                if valid.empty or valid.clip(lower=0.0).sum() <= 0:
+                    w = pd.Series(1.0 / n, index=tickers)
+                    logger.debug(
+                        "market_cap unavailable for selected names; using equal weight"
+                    )
+                else:
+                    mcap = mcap.fillna(valid.median()).clip(lower=1.0)
+                    w = mcap / mcap.sum()
             else:
                 w = pd.Series(1.0 / n, index=tickers)
                 logger.debug("market_cap not available, falling back to equal weight")
 
         elif cfg.weight_scheme == WeightScheme.SIGNAL:
-            # Weight proportional to signal strength
-            sig_abs = selected_signal.abs()
-            total = sig_abs.sum()
+            # Effective signals are positive ranks.  A lower value is stronger
+            # on the short side, so abs(signal) would reverse short strength.
+            strength = selected_signal.rank(
+                method="average",
+                ascending=(side == "long"),
+            )
+            total = strength.sum()
             if total > 0:
-                w = sig_abs / total
+                w = strength / total
             else:
                 w = pd.Series(1.0 / n, index=tickers)
 

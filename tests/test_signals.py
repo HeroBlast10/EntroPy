@@ -112,6 +112,23 @@ class TestVolatilityFactors:
         assert result.notna().sum() > 0
 
 
+class TestMomentumFactors:
+    def test_mom_12_1m_uses_classic_12_minus_1_window(self):
+        from quant_platform.core.signals.cross_sectional.momentum import Mom12_1M
+
+        dates = pd.bdate_range("2023-01-02", periods=274)
+        prices = pd.DataFrame({
+            "date": dates,
+            "ticker": "A",
+            "adj_close": np.arange(1.0, 275.0),
+        })
+        result = Mom12_1M().compute(prices, zscore=False)
+        observed = result.loc[result["date"] == dates[252], "MOM_12_1M"].iloc[0]
+        expected = prices.loc[231, "adj_close"] / prices.loc[0, "adj_close"] - 1.0
+
+        assert observed == pytest.approx(expected)
+
+
 class TestHMMRegime:
     def test_regime_returns_series(self):
         from quant_platform.core.signals.regime.hmm_regime import HMMTurbulenceProbability
@@ -143,8 +160,9 @@ class TestRegistry:
         from quant_platform.core.signals.registry import FactorRegistry
         reg = FactorRegistry()
         reg.discover()
-        # Should have at least: 24 CS + 3 Kalman + 2 entropy/hurst + 3 moments + 1 HMM + 1 OU = 34
-        assert len(reg) >= 34
+        # Baseline 34 + 4 new production factors (residual mom, overnight,
+        # accruals, Piotroski) = 38 lower bound.
+        assert len(reg) >= 38
 
     def test_filter_by_signal_type(self):
         from quant_platform.core.signals.registry import FactorRegistry
@@ -158,7 +176,8 @@ class TestRegistry:
         reg = FactorRegistry()
         reg.discover()
         mom = reg.list_factors(category="momentum")
-        assert len(mom) == 7
+        # 7 vanilla momentum factors + 1 ResidualMomentum (Blitz-Huij-Martens)
+        assert len(mom) == 8
 
 
 class TestAlphaModels:

@@ -35,7 +35,9 @@ class PriceFeatureCache:
         prices : DataFrame with columns [date, ticker, open, high, low, close, 
                  volume, adj_close, adj_factor, ...]
         """
-        self.prices = prices.copy()
+        # Rolling features must be chronological within ticker.  Preserve
+        # original row labels so downstream alignment remains key-based.
+        self.prices = prices.sort_values(["ticker", "date"]).copy()
         self._cache: Dict[str, pd.Series] = {}
         self._grouped = None  # Lazy groupby cache
         
@@ -87,7 +89,11 @@ class PriceFeatureCache:
         
         # --- Dollar volume ---
         if name == "dollar_vol":
-            return self.prices["adj_close"] * self.prices["volume"]
+            if "amount" in self.prices.columns:
+                return self.prices["amount"].astype(float)
+            if "close" not in self.prices.columns:
+                raise ValueError("prices must contain 'amount' or raw 'close'")
+            return self.prices["close"].abs() * self.prices["volume"].astype(float)
         
         # --- Market return (equal-weighted) ---
         if name == "market_ret":

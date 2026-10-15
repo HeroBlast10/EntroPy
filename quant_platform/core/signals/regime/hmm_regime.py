@@ -84,6 +84,35 @@ def _forward(
 
 
 @nb.njit(cache=True)
+def _forward_step(
+    previous: np.ndarray,
+    observation: float,
+    A: np.ndarray,
+    mu: np.ndarray,
+    sigma: np.ndarray,
+) -> np.ndarray:
+    """Advance one causal filtering step under fixed HMM parameters."""
+    K = previous.shape[0]
+    current = np.zeros(K)
+    for j in range(K):
+        predicted = 0.0
+        for i in range(K):
+            predicted += previous[i] * A[i, j]
+        current[j] = predicted * _gaussian_pdf(
+            observation,
+            mu[j],
+            sigma[j],
+        )
+    normalizer = current.sum()
+    if normalizer <= 0.0 or not np.isfinite(normalizer):
+        for j in range(K):
+            current[j] = 1.0 / K
+    else:
+        current /= normalizer
+    return current
+
+
+@nb.njit(cache=True)
 def _backward(
     obs: np.ndarray,
     A: np.ndarray,
@@ -169,11 +198,21 @@ def _baum_welch_step(
                     * _gaussian_pdf(obs[t + 1], mu[j], sigma[j])
                     * beta[t + 1, j]
                 )
-                xi_sum[i, j] += v
                 denom += v
         if denom == 0.0:
             denom = 1e-300
-        # (normalisation applied below via gamma sums)
+        # Each time slice must be normalised before accumulation.  Forward
+        # scaling constants vary by t, so summing raw numerators would give
+        # arbitrary weights to dates with larger observation likelihood.
+        for i in range(K):
+            for j in range(K):
+                v = (
+                    alpha[t, i]
+                    * A[i, j]
+                    * _gaussian_pdf(obs[t + 1], mu[j], sigma[j])
+                    * beta[t + 1, j]
+                )
+                xi_sum[i, j] += v / denom
 
     # --- M-step ---
     new_pi = np.empty(K)
@@ -291,13 +330,35 @@ class RegimeDetector:
     # ------------------------------------------------------------------
 
     def predict(self, obs: np.ndarray) -> np.ndarray:
-        """Return posterior state probabilities (T, K)."""
+        """Return smoothed posterior probabilities (offline diagnostics only).
+
+        Smoothing uses the backward pass and therefore conditions historical
+        states on future observations.  Live factors must use
+        :meth:`predict_filtered`.
+        """
         obs = np.asarray(obs, dtype=np.float64)
         alpha, c = _forward(obs, self.pi, self.A, self.mu, self.sigma)
         beta = _backward(obs, self.A, self.mu, self.sigma, c)
         gamma = alpha * beta
         gamma /= gamma.sum(axis=1, keepdims=True) + 1e-300
         return gamma
+
+    def predict_filtered(self, obs: np.ndarray) -> np.ndarray:
+        """Return causal filtered probabilities ``P(state_t | obs_0..t)``."""
+        if any(value is None for value in (self.pi, self.A, self.mu, self.sigma)):
+            raise RuntimeError("RegimeDetector must be fitted before prediction")
+        obs = np.asarray(obs, dtype=np.float64)
+        if obs.ndim != 1 or len(obs) == 0:
+            raise ValueError("obs must be a non-empty one-dimensional array")
+        alpha, _ = _forward(obs, self.pi, self.A, self.mu, self.sigma)
+        return alpha
+
+    @property
+    def turbulent_state(self) -> int:
+        """Index of the state with the largest fitted volatility."""
+        if self.sigma is None:
+            raise RuntimeError("RegimeDetector must be fitted first")
+        return int(np.argmax(self.sigma))
 
     def fit_predict(self, obs: np.ndarray) -> np.ndarray:
         """Fit then return posterior probabilities."""
@@ -335,21 +396,88 @@ class HMMTurbulenceProbability(FactorBase):
         df = prices.sort_values(["ticker", "date"]).copy()
         df["ret"] = df.groupby("ticker")["adj_close"].pct_change()
 
+        min_history = int(self._extra_params.get("min_history", self._meta.lookback))
+        train_window = int(
+            self._extra_params.get("train_window", max(252, min_history))
+        )
+        refit_interval = int(self._extra_params.get("refit_interval", 126))
+        max_iter = int(self._extra_params.get("max_iter", 10))
+        tol = float(self._extra_params.get("tol", 1e-4))
+        if min_history < 20:
+            raise ValueError("HMM min_history must be at least 20 observations")
+        if train_window < min_history:
+            raise ValueError("HMM train_window must be >= min_history")
+        if refit_interval < 1:
+            raise ValueError("HMM refit_interval must be positive")
+
         results = []
-        for _ticker, grp in df.groupby("ticker"):
-            rets = grp["ret"].dropna().values
-            if len(rets) < self.meta.lookback:
+        for _ticker, grp in df.groupby("ticker", sort=False):
+            valid = grp["ret"].replace([np.inf, -np.inf], np.nan).dropna()
+            rets = valid.to_numpy(dtype=np.float64)
+            if len(rets) <= min_history:
                 results.append(pd.Series(np.nan, index=grp.index, name=self.meta.name))
                 continue
-            hmm = RegimeDetector(n_states=2, max_iter=100, tol=1e-4)
-            gamma = hmm.fit_predict(rets)
-            prob_turb = np.full(len(grp), np.nan)
-            # gamma is aligned to non-NaN returns (offset by 1 for pct_change)
-            valid_idx = grp["ret"].dropna().index
-            prob_turb_vals = gamma[:, 1]  # state 1 = high-vol
+
+            prob_turb = np.full(len(rets), np.nan, dtype=float)
+            hmm: Optional[RegimeDetector] = None
+            last_refit = -refit_interval
+            filtered_state: Optional[np.ndarray] = None
+
+            # Fit only on observations strictly before the scored return.
+            # At a refit, initialise the causal state from the training
+            # context.  Between refits, advance that state one observation at
+            # a time instead of recomputing a 252-day forward pass for every
+            # row.  This preserves prefix invariance and reduces the scoring
+            # stage from O(T * train_window) to O(T).
+            for pos in range(min_history, len(rets)):
+                if hmm is None or pos - last_refit >= refit_interval:
+                    train_start = max(0, pos - train_window)
+                    train_obs = rets[train_start:pos]
+                    candidate: Optional[RegimeDetector] = None
+                    try:
+                        candidate = RegimeDetector(
+                            n_states=2,
+                            max_iter=max_iter,
+                            tol=tol,
+                        ).fit(train_obs)
+                    except Exception as exc:
+                        logger.debug("{} HMM refit failed at {}: {}", _ticker, pos, exc)
+                    if (
+                        candidate is not None
+                        and candidate.sigma is not None
+                        and np.isfinite(candidate.sigma).all()
+                    ):
+                        hmm = candidate
+                        last_refit = pos
+                        filtered_state = hmm.predict_filtered(
+                            rets[train_start:pos + 1]
+                        )[-1]
+                    elif hmm is None:
+                        continue
+                    elif filtered_state is not None:
+                        # Keep the last valid parameter set if a scheduled
+                        # refit is numerically unstable.
+                        filtered_state = _forward_step(
+                            filtered_state,
+                            rets[pos],
+                            hmm.A,
+                            hmm.mu,
+                            hmm.sigma,
+                        )
+                elif filtered_state is not None:
+                    filtered_state = _forward_step(
+                        filtered_state,
+                        rets[pos],
+                        hmm.A,
+                        hmm.mu,
+                        hmm.sigma,
+                    )
+
+                if filtered_state is not None:
+                    prob_turb[pos] = filtered_state[hmm.turbulent_state]
+
             s = pd.Series(np.nan, index=grp.index, name=self.meta.name)
-            s.loc[valid_idx] = prob_turb_vals
-            s = s.ffill()
+            s.loc[valid.index] = prob_turb
             results.append(s)
 
         return pd.concat(results)

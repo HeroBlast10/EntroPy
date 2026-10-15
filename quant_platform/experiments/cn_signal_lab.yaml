@@ -16,6 +16,10 @@ data:
   universe: "csi300"
   exchange: "XSHG"
 
+data_contract:
+  mode: "research"
+  allow_non_pit_research: true
+
 # --- Baseline: adapted CS factors for A-shares ---
 baseline:
   factors: ["MOM_12_1M", "VOL_20D"]

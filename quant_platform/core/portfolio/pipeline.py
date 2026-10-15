@@ -53,6 +53,7 @@ def run_portfolio_pipeline(
     multi_factor_lookback: int = 126,
     neutralize_by: Optional[Iterable[str]] = None,
     return_col: str = "fwd_ret_1d",
+    evaluation_end: Optional[pd.Timestamp | str] = None,
     **constructor_kwargs,
 ) -> Dict[str, object]:
     """End-to-end portfolio construction pipeline.
@@ -66,6 +67,9 @@ def run_portfolio_pipeline(
     config : :class:`PortfolioConfig`.  Uses defaults if ``None``.
     output_path : where to save the resulting weights Parquet.
     sector_map : ``[ticker, sector]`` DataFrame for sector constraints.
+    evaluation_end : optional final holding date.  It may extend past the
+        last signal date (for example by the forward-return horizon), but
+        cannot exceed available prices.
     **constructor_kwargs : extra kwargs passed to the constructor
         (e.g. ``risk_aversion=2.0`` for the optimised method).
 
@@ -95,6 +99,17 @@ def run_portfolio_pipeline(
     prices = prices_override.copy() if prices_override is not None else load_parquet(prices_path)
     factors["date"] = pd.to_datetime(factors["date"])
     prices["date"] = pd.to_datetime(prices["date"])
+    if evaluation_end is None:
+        requested_evaluation_end = min(
+            factors["date"].max(),
+            prices["date"].max(),
+        )
+    else:
+        requested_evaluation_end = pd.Timestamp(evaluation_end)
+        if requested_evaluation_end < factors["date"].min():
+            raise ValueError("evaluation_end precedes the first signal date")
+        if requested_evaluation_end > prices["date"].max():
+            raise ValueError("evaluation_end exceeds available price history")
 
     multi_factor_weights = pd.DataFrame()
     regime_controls = pd.DataFrame()
@@ -206,7 +221,7 @@ def run_portfolio_pipeline(
     from quant_platform.core.data.calendar import trading_dates as get_trading_dates
     all_dates = get_trading_dates(
         start=str(weights["date"].min().date()),
-        end=str(weights["date"].max().date()),
+        end=str(requested_evaluation_end.date()),
     )
     daily_weights = carry_forward_weights(weights, all_dates)
 
@@ -215,6 +230,8 @@ def run_portfolio_pipeline(
         daily_weights,
         mode=config.mode.value,
         allow_cash=_regime_holds_cash(regime_controls),
+        config=config,
+        sector_map=sector_map,
     )
 
     # --- Summary stats ---
@@ -246,7 +263,7 @@ def run_portfolio_pipeline(
 
     # Save metadata (signal_col used) for downstream consistency checks
     import json
-    meta_path = resolve_data_path("portfolio", "metadata.json")
+    meta_path = output_path.with_suffix(".metadata.json")
     meta = {
         "signal_col": signal_col,
         "signal_direction": signal_direction,
@@ -259,10 +276,18 @@ def run_portfolio_pipeline(
         "method": method,
         "mode": config.mode.value,
         "rebalance_freq": config.rebalance_freq,
+        "evaluation_end": str(requested_evaluation_end.date()),
         "weights_filename": output_path.name,  # Just the filename for reliable metadata-first lookup
         "weights_path": str(output_path),  # Keep full path for reference
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    # Keep a latest-artifact pointer for legacy auto-discovery.  The sidecar
+    # above is authoritative when output_path is custom.
+    latest_meta_path = resolve_data_path("portfolio", "metadata.json")
+    if latest_meta_path.resolve() != meta_path.resolve():
+        latest_meta_path.write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
     logger.info("Portfolio metadata saved → {}", meta_path)
 
     return {

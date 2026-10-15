@@ -142,25 +142,249 @@ def apply_constraints(
 
     Order: stock clip → sector clip → turnover clip → normalise.
     """
-    from quant_platform.core.portfolio.construction import PortfolioConstructor
+    return _project_weights(
+        weights,
+        config=config,
+        sector_map=sector_map,
+        prev_weights=prev_weights,
+    )
 
-    w = weights.copy()
 
-    # 1. Stock-level clip
-    w = clip_stock_weight(w, config.max_stock_weight, config.min_stock_weight, config.mode)
+def _project_weights(
+    weights: pd.Series,
+    *,
+    config: PortfolioConfig,
+    sector_map: Optional[pd.DataFrame],
+    prev_weights: Optional[pd.Series],
+) -> pd.Series:
+    """Project raw weights onto all configured constraints at once."""
+    from scipy.optimize import minimize
 
-    # 2. Sector-level clip
-    if sector_map is not None:
-        w = clip_sector_weight(w, config.max_sector_weight, sector_map)
+    target = pd.to_numeric(weights, errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna()
+    if target.index.has_duplicates:
+        target = target.groupby(level=0).sum()
+    if target.empty:
+        return pd.Series(dtype=float)
 
-    # 3. Turnover clip
     if config.max_turnover is not None and prev_weights is not None:
-        w = clip_turnover(w, prev_weights, config.max_turnover)
+        index = target.index.union(prev_weights.index)
+    else:
+        index = target.index
+    target = target.reindex(index, fill_value=0.0).astype(float)
+    prev = (
+        pd.to_numeric(prev_weights, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .reindex(index, fill_value=0.0)
+        if prev_weights is not None
+        else pd.Series(0.0, index=index)
+    )
 
-    # 4. Re-normalise
-    w = PortfolioConstructor.normalise_weights(w, config.mode)
+    n = len(index)
+    max_w = float(config.max_stock_weight)
+    min_w = max(float(config.min_stock_weight), 0.0)
+    if max_w <= 0:
+        raise ValueError("max_stock_weight must be positive")
 
-    # 5. Drop negligible positions
-    w = w[w.abs() > 1e-10]
+    constraints = []
+    if config.mode == PortfolioMode.LONG_ONLY:
+        if n * max_w < 1.0 - 1e-10:
+            raise ValueError(
+                f"Infeasible long-only stock cap: {n} names * {max_w:.4f} < 1"
+            )
+        lower = np.where(target.to_numpy() > 0, min_w, 0.0)
+        bounds = list(zip(lower, np.full(n, max_w)))
+        constraints.append({"type": "eq", "fun": lambda x: np.sum(x) - 1.0})
+        x0 = _bounded_sleeve_initial(target.clip(lower=0.0).to_numpy(), max_w)
+    else:
+        sign = np.sign(target.to_numpy())
+        prev_sign = np.sign(prev.to_numpy())
+        sign = np.where(sign == 0, prev_sign, sign)
+        long_mask = sign > 0
+        short_mask = sign < 0
+        if long_mask.sum() * max_w < 1.0 - 1e-10:
+            raise ValueError("Infeasible long sleeve under max_stock_weight")
+        if short_mask.sum() * max_w < 1.0 - 1e-10:
+            raise ValueError("Infeasible short sleeve under max_stock_weight")
 
-    return w
+        bounds = []
+        for i in range(n):
+            selected = abs(target.iloc[i]) > 1e-12
+            floor = min_w if selected else 0.0
+            if long_mask[i]:
+                bounds.append((floor, max_w))
+            elif short_mask[i]:
+                bounds.append((-max_w, -floor))
+            else:
+                bounds.append((0.0, 0.0))
+        constraints.extend([
+            {
+                "type": "eq",
+                "fun": lambda x, mask=long_mask: np.sum(x[mask]) - 1.0,
+            },
+            {
+                "type": "eq",
+                "fun": lambda x, mask=short_mask: np.sum(x[mask]) + 1.0,
+            },
+        ])
+        x0 = np.zeros(n, dtype=float)
+        x0[long_mask] = _bounded_sleeve_initial(
+            np.maximum(target.to_numpy()[long_mask], 0.0), max_w
+        )
+        x0[short_mask] = -_bounded_sleeve_initial(
+            np.maximum(-target.to_numpy()[short_mask], 0.0), max_w
+        )
+
+    if config.max_sector_weight is not None and config.max_sector_weight > 0:
+        if sector_map is None or sector_map.empty:
+            raise ValueError(
+                "max_sector_weight is enabled but no sector_map was supplied"
+            )
+        duplicate_sectors = (
+            sector_map[["ticker", "sector"]]
+            .dropna(subset=["ticker"])
+            .groupby("ticker")["sector"]
+            .nunique(dropna=False)
+        )
+        if (duplicate_sectors > 1).any():
+            raise ValueError("sector_map contains conflicting sectors for a ticker")
+        sector_lookup = (
+            sector_map[["ticker", "sector"]]
+            .drop_duplicates("ticker")
+            .set_index("ticker")["sector"]
+        )
+        sectors = pd.Series(index=index, data=index.map(sector_lookup))
+        missing_sector = sectors[sectors.isna()].index.tolist()
+        if missing_sector:
+            preview = ", ".join(map(str, missing_sector[:5]))
+            raise ValueError(
+                "Missing sector mapping while max_sector_weight is enabled: "
+                f"{preview}"
+            )
+        for sector in sectors.unique():
+            mask = sectors.eq(sector).to_numpy()
+            constraints.append({
+                "type": "ineq",
+                "fun": lambda x, mask=mask, cap=float(config.max_sector_weight): (
+                    cap - np.sum(np.abs(x[mask]))
+                ),
+            })
+
+    if config.max_turnover is not None and prev_weights is not None:
+        prev_values = prev.to_numpy(dtype=float)
+        constraints.append({
+            "type": "ineq",
+            "fun": lambda x, p=prev_values, cap=float(config.max_turnover): (
+                cap - np.sum(np.abs(x - p)) / 2.0
+            ),
+        })
+
+    target_values = target.to_numpy(dtype=float)
+    result = minimize(
+        lambda x: 0.5 * np.sum((x - target_values) ** 2),
+        x0,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraints,
+        options={"maxiter": 1000, "ftol": 1e-12},
+    )
+    if not result.success:
+        raise ValueError(f"Portfolio constraints are infeasible: {result.message}")
+
+    projected = pd.Series(result.x, index=index)
+    projected = projected[projected.abs() > 1e-10]
+    _verify_projected_weights(
+        projected,
+        config=config,
+        sector_map=sector_map,
+        prev_weights=prev_weights,
+    )
+    return projected
+
+
+def _bounded_sleeve_initial(values: np.ndarray, cap: float) -> np.ndarray:
+    """Build a non-negative, sum-one starting point under an upper bound."""
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+    if n == 0 or n * cap < 1.0 - 1e-10:
+        raise ValueError("No feasible bounded sleeve")
+    values = np.maximum(values, 0.0)
+    if values.sum() <= 0:
+        values = np.ones(n, dtype=float)
+
+    out = np.zeros(n, dtype=float)
+    remaining = 1.0
+    active = np.ones(n, dtype=bool)
+    scores = values.copy()
+    while remaining > 1e-12 and active.any():
+        active_idx = np.flatnonzero(active)
+        active_scores = scores[active]
+        proposal = (
+            np.full(active.sum(), remaining / active.sum())
+            if active_scores.sum() <= 0
+            else remaining * active_scores / active_scores.sum()
+        )
+        room = cap - out[active_idx]
+        hit = proposal >= room - 1e-12
+        if not hit.any():
+            out[active_idx] += proposal
+            remaining = 0.0
+            break
+        hit_idx = active_idx[hit]
+        allocated = room[hit]
+        out[hit_idx] += allocated
+        remaining -= allocated.sum()
+        active[hit_idx] = False
+    if remaining > 1e-8:
+        raise ValueError("Unable to construct a feasible bounded sleeve")
+    return out
+
+
+def _verify_projected_weights(
+    weights: pd.Series,
+    *,
+    config: PortfolioConfig,
+    sector_map: Optional[pd.DataFrame],
+    prev_weights: Optional[pd.Series],
+    tolerance: float = 1e-6,
+) -> None:
+    if (weights.abs() > config.max_stock_weight + tolerance).any():
+        raise ValueError("Projected portfolio violates max_stock_weight")
+    if config.mode == PortfolioMode.LONG_ONLY:
+        if abs(weights.sum() - 1.0) > tolerance or (weights < -tolerance).any():
+            raise ValueError("Projected long-only portfolio is not fully invested")
+    else:
+        if abs(weights[weights > 0].sum() - 1.0) > tolerance:
+            raise ValueError("Projected long sleeve does not sum to one")
+        if abs(weights[weights < 0].sum() + 1.0) > tolerance:
+            raise ValueError("Projected short sleeve does not sum to minus one")
+
+    if config.max_sector_weight is not None and config.max_sector_weight > 0:
+        if sector_map is None or sector_map.empty:
+            raise ValueError(
+                "max_sector_weight is enabled but no sector_map was supplied"
+            )
+        sector = (
+            sector_map[["ticker", "sector"]]
+            .drop_duplicates("ticker")
+            .set_index("ticker")["sector"]
+        )
+        grouped = weights.to_frame("weight").join(sector)
+        if grouped["sector"].isna().any():
+            raise ValueError(
+                "Projected portfolio contains tickers without a sector mapping"
+            )
+        gross = grouped.groupby("sector")["weight"].apply(lambda x: x.abs().sum())
+        if (gross > config.max_sector_weight + tolerance).any():
+            raise ValueError("Projected portfolio violates max_sector_weight")
+
+    if config.max_turnover is not None and prev_weights is not None:
+        idx = weights.index.union(prev_weights.index)
+        turnover = (
+            weights.reindex(idx, fill_value=0.0)
+            - prev_weights.reindex(idx, fill_value=0.0)
+        ).abs().sum() / 2.0
+        if turnover > config.max_turnover + tolerance:
+            raise ValueError("Projected portfolio violates max_turnover")

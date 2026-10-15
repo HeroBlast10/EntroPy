@@ -42,25 +42,59 @@ def rebalance_dates(
         result = all_dates
 
     elif freq == "W":
+        requested_end = (
+            pd.Timestamp(end)
+            if end is not None
+            else pd.Timestamp(all_dates[-1])
+        )
+        # Extend beyond the requested boundary so a truncated Monday/Tuesday
+        # is not mistaken for that week's final trading day.
+        schedule_dates = trading_dates(
+            start,
+            str((requested_end + pd.Timedelta(days=8)).date()),
+        )
         # Last trading day of each ISO week
-        df = pd.DataFrame({"date": all_dates})
+        df = pd.DataFrame({"date": schedule_dates})
         df["year_week"] = df["date"].dt.isocalendar().year.astype(str) + "-" + \
                           df["date"].dt.isocalendar().week.astype(str).str.zfill(2)
         last_per_week = df.groupby("year_week")["date"].max()
-        result = pd.DatetimeIndex(sorted(last_per_week.values), name="date")
+        result = pd.DatetimeIndex(
+            sorted(last_per_week[last_per_week <= requested_end].values),
+            name="date",
+        )
 
     elif freq == "M":
+        requested_end = (
+            pd.Timestamp(end)
+            if end is not None
+            else pd.Timestamp(all_dates[-1])
+        )
+        schedule_dates = trading_dates(
+            start,
+            str((requested_end + pd.Timedelta(days=40)).date()),
+        )
         # Last trading day of each calendar month
-        df = pd.DataFrame({"date": all_dates})
+        df = pd.DataFrame({"date": schedule_dates})
         df["year_month"] = df["date"].dt.to_period("M")
         last_per_month = df.groupby("year_month")["date"].max()
-        result = pd.DatetimeIndex(sorted(last_per_month.values), name="date")
+        result = pd.DatetimeIndex(
+            sorted(last_per_month[last_per_month <= requested_end].values),
+            name="date",
+        )
 
     else:
         raise ValueError(f"Unknown rebalance frequency: {freq!r}. Use 'D', 'W', or 'M'.")
 
-    logger.info("Rebalance schedule: freq={}, {} dates ({} – {})",
-                freq, len(result), result[0].date(), result[-1].date())
+    if len(result):
+        logger.info(
+            "Rebalance schedule: freq={}, {} dates ({} – {})",
+            freq,
+            len(result),
+            result[0].date(),
+            result[-1].date(),
+        )
+    else:
+        logger.info("Rebalance schedule: freq={}, 0 complete periods", freq)
     return result
 
 
@@ -128,15 +162,26 @@ def carry_forward_weights(
     first_reb = weights["date"].min()
     wide = wide.loc[wide.index >= first_reb]
 
-    # Melt back to long
+    # Melt back to long.  Preserve the rebalance schedule explicitly so the
+    # execution engine can distinguish a held target from an instruction to
+    # trade back to the same target after weights have drifted.
     long = wide.reset_index().melt(
         id_vars=["date"], var_name="ticker", value_name="weight",
     )
+    rebalance_set = set(pd.to_datetime(rebalance_dates_list))
+    long["is_rebalance"] = long["date"].isin(rebalance_set)
 
-    # Drop zeros / NaN (stocks not in portfolio)
-    # Keep only non-zero positions
+    # Drop inactive zero rows during invested periods.  When the whole target
+    # is cash, retain the zero vector so the execution ledger still receives
+    # the liquidation instruction and continues emitting cash-only dates.
     long = long.dropna(subset=["weight"])
-    long = long[long["weight"].abs() > 1e-10].reset_index(drop=True)
+    gross_by_date = long.groupby("date")["weight"].transform(
+        lambda values: values.abs().sum()
+    )
+    long = long[
+        (long["weight"].abs() > 1e-10)
+        | (gross_by_date <= 1e-10)
+    ].reset_index(drop=True)
 
     return long
 
@@ -146,6 +191,8 @@ def validate_portfolio_weights(
     mode: str = "long_only",
     tolerance: float = 1e-6,
     allow_cash: bool = False,
+    config=None,
+    sector_map: Optional[pd.DataFrame] = None,
 ) -> None:
     """Validate portfolio weights satisfy invariants.
     
@@ -181,7 +228,7 @@ def validate_portfolio_weights(
             )
             if invalid_sum:
                 logger.error(
-                    "Long-only weights sum to %.4f (not 1.0) on %s. Tickers: %s",
+                    "Long-only weights sum to {:.4f} (not 1.0) on {}. Tickers: {}",
                     weight_sum,
                     date,
                     group[["ticker", "weight"]].to_dict("records"),
@@ -198,15 +245,63 @@ def validate_portfolio_weights(
                 )
         
         elif mode == "long_short":
-            # Check gross exposure <= 2 (100% long + 100% short)
+            long_exposure = group.loc[group["weight"] > 0, "weight"].sum()
+            short_exposure = group.loc[group["weight"] < 0, "weight"].sum()
+            net_exposure = weight_sum
             gross_exposure = group["weight"].abs().sum()
             if gross_exposure > 2.0 + tolerance:
                 raise ValueError(
                     f"Gross exposure {gross_exposure:.4f} > 2.0 on {date}"
                 )
+            if abs(net_exposure) > tolerance:
+                raise ValueError(
+                    f"Long-short net exposure {net_exposure:.4f} is not zero on {date}"
+                )
+            if allow_cash:
+                if long_exposure > 1.0 + tolerance or short_exposure < -1.0 - tolerance:
+                    raise ValueError(
+                        f"Long-short sleeve exposure exceeds 100% on {date}"
+                    )
+            elif (
+                abs(long_exposure - 1.0) > tolerance
+                or abs(short_exposure + 1.0) > tolerance
+            ):
+                raise ValueError(
+                    f"Long-short sleeves are not +1/-1 on {date}: "
+                    f"long={long_exposure:.4f}, short={short_exposure:.4f}"
+                )
+
+        else:
+            raise ValueError(f"Unknown portfolio mode: {mode!r}")
+
+        if config is not None:
+            if (group["weight"].abs() > config.max_stock_weight + tolerance).any():
+                raise ValueError(f"max_stock_weight violated on {date}")
+
+            if config.max_sector_weight is not None and config.max_sector_weight > 0:
+                if sector_map is None or sector_map.empty:
+                    raise ValueError(
+                        "max_sector_weight is enabled but no sector_map was supplied"
+                    )
+                sector = (
+                    sector_map[["ticker", "sector"]]
+                    .drop_duplicates("ticker")
+                    .set_index("ticker")["sector"]
+                )
+                mapped = group.set_index("ticker")[["weight"]].join(sector)
+                if mapped["sector"].isna().any():
+                    raise ValueError(
+                        f"Missing sector mapping on {date}"
+                    )
+                gross = (
+                    mapped.groupby("sector")["weight"]
+                    .apply(lambda x: x.abs().sum())
+                )
+                if (gross > config.max_sector_weight + tolerance).any():
+                    raise ValueError(f"max_sector_weight violated on {date}")
     
     logger.info(
-        "Portfolio weights validated: mode=%s, %d dates, all invariants satisfied",
+        "Portfolio weights validated: mode={}, {} dates, all invariants satisfied",
         mode,
         weights["date"].nunique(),
     )

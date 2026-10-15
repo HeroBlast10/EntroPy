@@ -66,6 +66,7 @@ class CostModel:
     # --- Regulatory fees (US) ---
     sec_fee_rate: float = 8.0e-6            # SEC fee: ~$8 per $1M (sells only)
     finra_taf_per_share: float = 0.000119   # FINRA TAF: $0.000119/share (sells only)
+    finra_taf_max: Optional[float] = 8.30   # per-trade cap; set None to disable
 
     # --- Stamp duty (non-US placeholder) ---
     stamp_duty_pct: float = 0.0             # e.g. 0.001 for UK (10 bps, buys only)
@@ -76,6 +77,40 @@ class CostModel:
 
     # --- ADV lookback for participation rate ---
     adv_lookback: int = 20                  # trading days for average daily volume
+    max_participation_rate: Optional[float] = 0.10
+
+    def __post_init__(self) -> None:
+        nonnegative = (
+            "commission_per_share",
+            "commission_pct",
+            "commission_min",
+            "slippage_bps",
+            "impact_coeff",
+            "sec_fee_rate",
+            "finra_taf_per_share",
+            "stamp_duty_pct",
+            "borrow_rate_annual",
+        )
+        for name in nonnegative:
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if not np.isfinite(self.impact_exponent) or self.impact_exponent <= 0:
+            raise ValueError("impact_exponent must be finite and positive")
+        if self.finra_taf_max is not None and (
+            not np.isfinite(self.finra_taf_max)
+            or self.finra_taf_max < 0
+        ):
+            raise ValueError(
+                "finra_taf_max must be finite and non-negative or None"
+            )
+        if int(self.adv_lookback) <= 0:
+            raise ValueError("adv_lookback must be positive")
+        if (
+            self.max_participation_rate is not None
+            and not 0 < self.max_participation_rate <= 1
+        ):
+            raise ValueError("max_participation_rate must be in (0, 1] or None")
 
     def describe(self) -> Dict[str, float]:
         """Return all parameters as a flat dict (useful for logging / serialisation)."""
@@ -132,10 +167,20 @@ def estimate_trade_cost(
     slip = notional * (model.slippage_bps / 10_000)
 
     # 3. Market impact
-    participation = shares / max(adv_shares, 1.0)
+    safe_adv = (
+        float(adv_shares)
+        if np.isfinite(adv_shares) and adv_shares > 0
+        else max(shares, 1.0)
+    )
+    safe_daily_vol = (
+        float(daily_vol)
+        if np.isfinite(daily_vol) and daily_vol >= 0
+        else 0.02
+    )
+    participation = shares / safe_adv
     # impact = coeff × σ_daily × participation^exponent × notional
     impact = (model.impact_coeff
-              * daily_vol
+              * safe_daily_vol
               * (participation ** model.impact_exponent)
               * notional)
 
@@ -144,6 +189,8 @@ def estimate_trade_cost(
 
     # 5. FINRA TAF (sells only)
     taf = shares * model.finra_taf_per_share if side == "sell" else 0.0
+    if side == "sell" and model.finra_taf_max is not None:
+        taf = min(taf, model.finra_taf_max)
 
     # 6. Stamp duty (buys only, non-US)
     stamp = notional * model.stamp_duty_pct if side == "buy" else 0.0

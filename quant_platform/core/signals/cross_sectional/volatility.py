@@ -94,12 +94,13 @@ def _rolling_downside_std(arr: np.ndarray, window: int, min_periods: int) -> np.
     
     for i in range(window - 1, n):
         w = arr[i - window + 1:i + 1]
-        # Filter to negative returns only
-        neg = w[w < 0]
-        if len(neg) >= min_periods:
-            out[i] = np.sqrt(np.mean(neg ** 2))
-        elif len(w[np.isfinite(w)]) >= min_periods:
-            out[i] = 0.0  # No negative returns in window
+        valid = w[np.isfinite(w)]
+        if len(valid) >= min_periods:
+            # Semi-deviation uses all valid observations in the denominator
+            # and truncates gains at zero.  Requiring 40 negative days made
+            # almost every ordinary 60-day window spuriously equal to zero.
+            downside = np.minimum(valid, 0.0)
+            out[i] = np.sqrt(np.mean(downside ** 2))
     
     return out
 
@@ -330,7 +331,8 @@ class TailRisk(FactorBase):
         description="60-day CVaR at 5% (Expected Shortfall)",
         lookback=61,
         lag=1,
-        direction=-1,
+        # Raw CVaR is a negative return: larger (less negative) is safer.
+        direction=1,
     )
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:

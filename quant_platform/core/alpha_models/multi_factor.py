@@ -183,8 +183,19 @@ class MultiFactorCombiner:
             eff_col = self._eff_col(factor)
             ic_panel[factor] = compute_rank_ic_series(effective, eff_col, return_col=return_col)
         ic = pd.concat(ic_panel, axis=1).reindex(dates)
-        mean = ic.rolling(self.config.lookback, min_periods=self.config.min_periods).mean().shift(1)
-        std = ic.rolling(self.config.lookback, min_periods=self.config.min_periods).std().shift(1)
+        # IC dated t is not observable until its forward-return horizon has
+        # completed.  Require completion strictly before the decision date.
+        availability_lag = _forward_return_horizon(return_col) + 1
+        mean = (
+            ic.rolling(self.config.lookback, min_periods=self.config.min_periods)
+            .mean()
+            .shift(availability_lag)
+        )
+        std = (
+            ic.rolling(self.config.lookback, min_periods=self.config.min_periods)
+            .std()
+            .shift(availability_lag)
+        )
         raw = mean.divide(std.replace(0, np.nan))
         return self._normalise_weight_frame(raw, factors, fallback_dates=dates)
 
@@ -201,6 +212,7 @@ class MultiFactorCombiner:
             direction_map={self._eff_col(f): 1 for f in factors},
         )
         returns = returns.rename(columns={self._eff_col(f): f for f in factors})
+        returns = returns.shift(_forward_return_horizon(return_col))
         dates = pd.DatetimeIndex(sorted(effective["date"].dropna().unique()))
         if returns.empty:
             return self._equal_weights(dates, factors)
@@ -240,7 +252,12 @@ class MultiFactorCombiner:
         if returns.empty:
             return self._equal_weights(dates, factors)
 
-        vol = returns.rolling(self.config.lookback, min_periods=self.config.min_periods).std().shift(1)
+        availability_lag = _forward_return_horizon(return_col) + 1
+        vol = (
+            returns.rolling(self.config.lookback, min_periods=self.config.min_periods)
+            .std()
+            .shift(availability_lag)
+        )
         inv_vol = 1.0 / vol.replace(0, np.nan)
         return self._normalise_weight_frame(inv_vol.reindex(dates), factors, fallback_dates=dates)
 
@@ -384,3 +401,14 @@ def infer_factor_metadata(factor_cols: Iterable[str]) -> tuple[Dict[str, int], D
         logger.debug("Could not infer factor metadata from registry: {}", exc)
     return directions, categories
 
+
+def _forward_return_horizon(return_col: str) -> int:
+    """Parse ``fwd_ret_<N>d``; unknown return columns default to one day."""
+
+    prefix = "fwd_ret_"
+    suffix = "d"
+    if return_col.startswith(prefix) and return_col.endswith(suffix):
+        value = return_col[len(prefix) : -len(suffix)]
+        if value.isdigit() and int(value) > 0:
+            return int(value)
+    return 1

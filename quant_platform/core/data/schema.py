@@ -13,14 +13,15 @@ import pyarrow as pa
 # prices
 # ===================================================================
 # One row per (date, ticker).
-# All price fields are UNADJUSTED (raw) plus a cumulative adjustment
-# factor ``adj_factor`` so the user can choose when/how to adjust.
+# All price fields are reconstructed historical as-traded (raw) units.
+# ``split_factor`` is the causal cumulative split factor, while
+# ``adj_factor`` may additionally contain dividend reinvestment.
 
 PRICES_SCHEMA = pa.schema(
     [
         pa.field("date", pa.date32(), nullable=False),
         pa.field("ticker", pa.string(), nullable=False),
-        # --- raw OHLCV ---
+        # --- reconstructed historical as-traded OHLCV ---
         pa.field("open", pa.float64()),
         pa.field("high", pa.float64()),
         pa.field("low", pa.float64()),
@@ -28,7 +29,8 @@ PRICES_SCHEMA = pa.schema(
         pa.field("volume", pa.int64()),
         pa.field("amount", pa.float64()),          # close * volume (turnover proxy)
         # --- adjustment ---
-        pa.field("adj_factor", pa.float64()),       # cumulative split factor (point-in-time)
+        pa.field("split_factor", pa.float64()),     # cumulative split factor (point-in-time)
+        pa.field("adj_factor", pa.float64()),       # split + optional dividend factor
         pa.field("adj_close", pa.float64()),         # close * adj_factor (convenience)
         # --- trading status ---
         pa.field("is_tradable", pa.bool_()),         # False if halted / no trades
@@ -55,11 +57,16 @@ UNIVERSE_SCHEMA = pa.schema(
         pa.field("market_cap", pa.float64()),        # USD, as-of date
         pa.field("close_price", pa.float64()),
         pa.field("in_index", pa.bool_()),             # member of target index
+        pa.field("membership_source", pa.string()),
+        pa.field("membership_is_point_in_time", pa.bool_()),
         pa.field("pass_all_filters", pa.bool_()),     # final tradable flag
     ],
     metadata={
         b"table": b"universe",
-        b"description": b"Daily tradable universe after applying listing, price, and cap filters.",
+        b"description": (
+            b"Daily tradable universe with explicit index-membership "
+            b"provenance and point-in-time status."
+        ),
         b"key": b"(date, ticker)",
     },
 )
@@ -79,6 +86,8 @@ FUNDAMENTALS_SCHEMA = pa.schema(
         # --- identifiers ---
         pa.field("report_date", pa.date32()),         # fiscal period end
         pa.field("publish_date", pa.date32()),        # SEC filing / press release
+        pa.field("data_source", pa.string()),
+        pa.field("is_point_in_time", pa.bool_()),
         # --- income statement ---
         pa.field("revenue", pa.float64()),
         pa.field("gross_profit", pa.float64()),
@@ -103,8 +112,9 @@ FUNDAMENTALS_SCHEMA = pa.schema(
     metadata={
         b"table": b"fundamentals",
         b"description": (
-            b"Point-in-time fundamental data (income, balance, cashflow) "
-            b"with publication lag applied to avoid look-ahead bias."
+            b"Fundamental data with explicit source and point-in-time status. "
+            b"Non-PIT research fallbacks are identifiable and must not enter "
+            b"production features."
         ),
         b"key": b"(date, ticker)",
     },

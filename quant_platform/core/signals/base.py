@@ -117,8 +117,8 @@ class FactorBase(abc.ABC):
         prices: pd.DataFrame,
         fundamentals: Optional[pd.DataFrame] = None,
         *,
-        winsorize_limits: Tuple[float, float] = (0.01, 0.99),
-        zscore: bool = True,
+        winsorize_limits: Optional[Tuple[float, float]] = None,
+        zscore: Optional[bool] = None,
         neutralize_by: Optional[List[str]] = None,
         fillna_method: str = "drop",
         **kwargs,
@@ -129,8 +129,11 @@ class FactorBase(abc.ABC):
         ----------
         prices : DataFrame with columns from the ``prices`` schema.
         fundamentals : optional fundamentals DataFrame.
-        winsorize_limits : lower/upper quantile clipping bounds.
-        zscore : if True, cross-sectional z-score each date.
+        winsorize_limits : lower/upper quantile clipping bounds.  When omitted,
+            cross-sectional factors use ``(0.01, 0.99)`` while time-series,
+            regime, and relative-value signals preserve their native scale.
+        zscore : whether to cross-sectionally standardise each date.  When
+            omitted, this defaults to True only for cross-sectional factors.
         neutralize_by : columns in *prices* to neutralize against
             (e.g. ``["sector"]`` for industry neutralization, or
             ``["log_mcap"]`` for size, or both).
@@ -156,10 +159,16 @@ class FactorBase(abc.ABC):
         if isinstance(raw, pd.Series):
             raw.name = name
 
-        # Build a working DataFrame
+        # Build a working DataFrame.  Keep explicitly requested exposure
+        # columns: dropping them here used to make ``neutralize_by`` silently
+        # do nothing even though the columns were present on ``prices``.
         if "date" in prices.columns and "ticker" in prices.columns:
-            df = prices[["date", "ticker"]].copy()
-            df[name] = raw.values if len(raw) == len(df) else raw.reindex(df.index).values
+            neutral_cols = [
+                col for col in (neutralize_by or [])
+                if col in prices.columns and col not in ("date", "ticker")
+            ]
+            df = prices[["date", "ticker", *neutral_cols]].copy()
+            df[name] = self._align_raw_signal(raw, prices, name)
         else:
             df = raw.reset_index()
             df.columns = list(df.columns[:-1]) + [name]
@@ -175,11 +184,20 @@ class FactorBase(abc.ABC):
             logger.warning("Factor {} produced an empty DataFrame after missing-value handling", name)
             return df
 
-        # 4. Winsorize
-        df = winsorize(df, name, limits=winsorize_limits)
+        is_cross_sectional = self._meta.signal_type == "cross_sectional"
+        effective_winsor = (
+            (0.01, 0.99) if winsorize_limits is None and is_cross_sectional
+            else winsorize_limits
+        )
+        effective_zscore = is_cross_sectional if zscore is None else bool(zscore)
+
+        # 4. Winsorize.  Native probability / z-score / latent-state signals
+        # must not be silently converted to a cross-sectional representation.
+        if effective_winsor is not None:
+            df = winsorize(df, name, limits=effective_winsor)
 
         # 5. Z-score
-        if zscore:
+        if effective_zscore:
             df = cross_sectional_zscore(df, name)
 
         # 6. Neutralize
@@ -189,6 +207,53 @@ class FactorBase(abc.ABC):
         logger.info("Factor {}: {} rows, date range {} – {}",
                      name, len(df), df["date"].min(), df["date"].max())
         return df[["date", "ticker", name]]
+
+    @staticmethod
+    def _align_raw_signal(
+        raw: pd.Series,
+        prices: pd.DataFrame,
+        name: str,
+    ) -> pd.Series:
+        """Align a raw factor Series to ``prices`` without positional fallbacks.
+
+        Concrete factors commonly sort a panel by ``ticker, date`` internally.
+        The canonical stored panel is sorted by ``date, ticker``.  Assigning
+        ``raw.values`` therefore corrupts keys even when lengths match.  A raw
+        Series may be indexed either by the original row index or explicitly
+        by ``(date, ticker)``; both forms are aligned here.
+        """
+        if not isinstance(raw, pd.Series):
+            raw = pd.Series(raw)
+
+        if isinstance(raw.index, pd.MultiIndex):
+            index_names = list(raw.index.names)
+            if "date" not in index_names or "ticker" not in index_names:
+                raise ValueError(
+                    f"Factor {name} returned a MultiIndex without date/ticker names"
+                )
+            keyed = raw.rename(name).reset_index()
+            keyed = keyed[["date", "ticker", name]]
+            if keyed.duplicated(["date", "ticker"]).any():
+                raise ValueError(f"Factor {name} returned duplicate (date, ticker) keys")
+            target = prices[["date", "ticker"]].copy()
+            target["_row_order"] = np.arange(len(target))
+            aligned = target.merge(
+                keyed,
+                on=["date", "ticker"],
+                how="left",
+                validate="one_to_one",
+                sort=False,
+            ).sort_values("_row_order")
+            return pd.Series(aligned[name].to_numpy(), index=prices.index, name=name)
+
+        if not prices.index.is_unique:
+            raise ValueError("prices index must be unique for index-aligned factor output")
+        if not raw.index.is_unique:
+            raise ValueError(f"Factor {name} returned a non-unique row index")
+
+        # Reindex even when lengths match.  This is the critical invariant:
+        # values follow row labels rather than the order chosen by _compute().
+        return raw.reindex(prices.index).rename(name)
 
     def _call_compute(
         self,

@@ -1,0 +1,29 @@
+# Reproducible top-level research environment verified on Python 3.12.
+# Install with:
+#   python -m pip install -r requirements-lock.txt
+#
+# Transitive dependencies remain platform-specific (notably PyTorch CPU/CUDA
+# wheels), so experiment metadata also records the resolved runtime versions.
+
+pandas==2.2.2
+pyarrow==16.1.0
+numpy==1.26.4
+scipy==1.13.1
+PyYAML==6.0.1
+yfinance==0.2.65
+exchange-calendars==4.13.1
+baostock==0.8.9
+simfin==1.0.1
+numba==0.60.0
+matplotlib==3.9.2
+plotly==5.24.1
+streamlit==1.55.0
+ib-insync==0.9.86
+tqdm==4.66.5
+loguru==0.7.3
+click==8.3.1
+xxhash==3.6.0
+scikit-learn==1.5.1
+lightgbm==4.6.0
+torch==2.7.0
+pytest==8.4.2

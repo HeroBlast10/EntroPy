@@ -302,7 +302,10 @@ class SpreadHL(FactorBase):
         beta_sum = beta.groupby(df["ticker"]).transform(
             lambda s: s.rolling(2, min_periods=2).sum()
         )
-        k = 2 * np.sqrt(2) - 1
+        # Equation (14) denominator.  The old 2*sqrt(2)-1 constant made
+        # ordinary ranges produce negative alpha and collapse to zero after
+        # clipping.
+        k = 3 - 2 * np.sqrt(2)
         alpha = (_safe_div(np.sqrt(2 * beta_sum) - np.sqrt(beta_sum), k)
                  - np.sqrt(_safe_div(gamma, k)))
         spread = 2 * (np.exp(alpha) - 1) / (1 + np.exp(alpha))

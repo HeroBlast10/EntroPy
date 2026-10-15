@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -38,6 +39,7 @@ class OrderManager:
         self._trades: List[object] = []       # ib_insync.Trade objects
         self._fill_log: List[Dict] = []       # structured fill records
         self._order_id_map: Dict[int, str] = {}  # orderId → symbol
+        self._reference_prices: Dict[int, float] = {}
 
         # Wire up fill callback
         ib = self._gw.ib
@@ -81,14 +83,14 @@ class OrderManager:
         ref_price: Optional[float] = None,
     ) -> Optional[object]:
         """Place an IB Adaptive algo order (patient fill)."""
-        from ib_insync import Order
+        from ib_insync import Order, TagValue
         order = Order()
         order.action = side
         order.totalQuantity = quantity
         order.orderType = "MKT"
         order.algoStrategy = "Adaptive"
         order.algoParams = [
-            {"tag": "adaptivePriority", "value": "Patient"},
+            TagValue("adaptivePriority", "Patient"),
         ]
         return self._submit(symbol, order, ref_price)
 
@@ -100,8 +102,13 @@ class OrderManager:
         self, symbol: str, order, ref_price: Optional[float]
     ) -> Optional[object]:
         """Shared logic: risk check → submit → log."""
-        from quant_platform.core.execution.paper.ibkr.market_data import MarketDataManager
-
+        if self._cfg.ib.readonly:
+            logger.info("READ ONLY | no order submission for {}", symbol)
+            return None
+        if not self._cfg.strategy.dry_run and not self._cfg.strategy.enable_paper_orders:
+            logger.warning("Paper order submission has not been enabled")
+            return None
+        account = self._gw.assert_paper_account()
         ib = self._gw.ib
 
         # Get contract
@@ -114,11 +121,21 @@ class OrderManager:
         contract = qualified[0]
 
         # Estimate price for risk check
-        price = ref_price or 100.0  # fallback; caller should provide mid
+        price = ref_price
+        if price is None or not math.isfinite(price) or price <= 0:
+            logger.warning("No valid reference price for {} — order rejected", symbol)
+            return None
+        quantity = float(order.totalQuantity)
+        if not math.isfinite(quantity) or quantity <= 0 or not quantity.is_integer():
+            logger.warning("Invalid whole-share quantity for {}", symbol)
+            return None
 
         # --- Risk gate ---
-        positions = self._count_positions()
-        existing_notional = self._position_notional(symbol)
+        account_positions = ib.positions(account)
+        positions = sum(p.position != 0 for p in account_positions)
+        current_shares = sum(p.position for p in account_positions
+                             if p.contract.conId == contract.conId)
+        existing_notional = current_shares * price
 
         passed, reason = self._risk.check_order(
             side=order.action,
@@ -126,6 +143,7 @@ class OrderManager:
             price=price,
             current_positions=positions,
             existing_position_notional=existing_notional,
+            current_position_shares=current_shares,
         )
         if not passed:
             logger.warning("ORDER REJECTED | {} {} {} @ ~${:.2f} | {}",
@@ -140,9 +158,34 @@ class OrderManager:
             return None
 
         # --- Submit ---
+        self._cfg.validate()
+        # Never duplicate a pending order or size against borrowed/unsettled cash.
+        pending = [t for t in ib.openTrades() if t.order.account == account and t.isActive()]
+        if any(t.contract.conId == contract.conId for t in pending):
+            logger.warning("Pending order already exists for {}", symbol)
+            return None
+        if order.action == "BUY":
+            cash_value = self._gw.account_values().get("SettledCash_USD")
+            cash = float(cash_value) if cash_value is not None else float("nan")
+            reserved = 0.0
+            for t in pending:
+                if t.order.action != "BUY":
+                    continue
+                ref = t.order.lmtPrice if t.order.orderType == "LMT" else self._reference_prices.get(t.order.orderId)
+                if ref is None or not math.isfinite(ref) or ref <= 0:
+                    logger.warning("Pending buy exposure is unknown — new buy blocked")
+                    return None
+                reserved += float(t.orderStatus.remaining) * ref
+            if not math.isfinite(cash) or (cash - reserved) < quantity * price * 1.01:
+                logger.warning("Insufficient or unavailable settled USD cash")
+                return None
+        order.account = account
+        order.tif = "DAY"
+        order.outsideRth = False
         trade = ib.placeOrder(contract, order)
         self._trades.append(trade)
         self._order_id_map[trade.order.orderId] = symbol
+        self._reference_prices[trade.order.orderId] = price
 
         logger.info("ORDER SUBMITTED | {} {} {} @ {} | orderId={}",
                      order.action, order.totalQuantity, symbol,
@@ -154,16 +197,23 @@ class OrderManager:
     # ------------------------------------------------------------------
 
     def cancel_order(self, trade) -> None:
-        """Cancel a specific order."""
+        """Cancel only an active order created by this manager."""
+        if (self._cfg.ib.readonly or self._cfg.strategy.dry_run or
+                not self._cfg.strategy.enable_paper_orders):
+            return
+        if not any(t is trade for t in self._trades) or not trade.isActive():
+            return
+        if (trade.order.account != self._gw.assert_paper_account() or
+                trade.order.clientId != self._cfg.ib.client_id):
+            raise ValueError("Cannot cancel an order belonging to another account/client.")
         ib = self._gw.ib
         ib.cancelOrder(trade.order)
         logger.info("ORDER CANCELLED | orderId={}", trade.order.orderId)
 
     def cancel_all(self) -> None:
-        """Cancel all open orders."""
-        ib = self._gw.ib
-        ib.reqGlobalCancel()
-        logger.warning("ALL ORDERS CANCELLED (global cancel)")
+        """Cancel this run's orders only; never issue a global cancellation."""
+        for trade in self._trades:
+            self.cancel_order(trade)
 
     # ------------------------------------------------------------------
     # Queries
@@ -173,7 +223,9 @@ class OrderManager:
         """Return list of currently open orders."""
         ib = self._gw.ib
         result = []
-        for trade in ib.openTrades():
+        for trade in self._trades:
+            if not trade.isActive():
+                continue
             result.append({
                 "orderId": trade.order.orderId,
                 "symbol": trade.contract.symbol,
@@ -223,6 +275,12 @@ class OrderManager:
         """Called on each execution (partial or full fill)."""
         sym = trade.contract.symbol if trade.contract else "?"
         exec_info = fill.execution
+        if (exec_info.orderId not in self._order_id_map or
+                exec_info.acctNumber != self._gw.account_id or
+                exec_info.clientId != self._cfg.ib.client_id):
+            return
+        if any(r["execId"] == exec_info.execId for r in self._fill_log):
+            return
         notional = exec_info.shares * exec_info.price
 
         record = {
@@ -244,24 +302,3 @@ class OrderManager:
         logger.info("FILL | {} {} {} @ ${:.2f} | notional=${:,.0f} | execId={}",
                      exec_info.side, exec_info.shares, sym, exec_info.price,
                      notional, exec_info.execId)
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _count_positions(self) -> int:
-        """Count current open positions."""
-        try:
-            return len(self._gw.ib.positions())
-        except Exception:
-            return 0
-
-    def _position_notional(self, symbol: str) -> float:
-        """Current notional exposure for a specific symbol."""
-        try:
-            for pos in self._gw.ib.positions():
-                if pos.contract.symbol == symbol:
-                    return abs(pos.position * pos.avgCost)
-        except Exception:
-            pass
-        return 0.0

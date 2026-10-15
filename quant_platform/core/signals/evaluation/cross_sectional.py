@@ -57,7 +57,9 @@ class CrossSectionalScorecard:
         # Add forward returns
         prices = prices.copy()
         prices = prices.sort_values(["ticker", "date"])
-        prices["fwd_ret"] = prices.groupby("ticker")["close"].pct_change(forward_periods).shift(-forward_periods)
+        price_col = "adj_close" if "adj_close" in prices.columns else "close"
+        future_price = prices.groupby("ticker")[price_col].shift(-forward_periods)
+        prices["fwd_ret"] = future_price / prices[price_col] - 1.0
         
         # Merge signal with forward returns
         eval_df = signal_df.merge(

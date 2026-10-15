@@ -14,6 +14,10 @@ data:
   universe: "sp500"
   exchange: "XNYS"
 
+data_contract:
+  mode: "research"
+  allow_non_pit_research: true
+
 factors:
   signal_type: "cross_sectional"
   names: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD"]
@@ -29,7 +33,8 @@ portfolio:
   n_quantiles: 5
   long_quantile: 5
   max_stock_weight: 0.05
-  max_sector_weight: 0.30
+  # Historical PIT sector classifications are not bundled.
+  max_sector_weight: null
 
 multi_factor:
   method: "rolling_icir"

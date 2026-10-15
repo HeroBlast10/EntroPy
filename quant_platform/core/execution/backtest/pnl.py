@@ -12,7 +12,8 @@ The engine is purely vectorised (no per-date loop) for speed.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from dataclasses import replace
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ def compute_daily_returns(
     trades: Optional[pd.DataFrame] = None,
     cost_model: Optional[CostModel] = None,
     initial_capital: float = 1_000_000.0,
+    execution_ledger: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Compute daily gross and net portfolio returns.
 
@@ -52,111 +54,67 @@ def compute_daily_returns(
     if cost_model is None:
         cost_model = CostModel()
 
-    dw = daily_weights.copy()
-    px = prices.copy()
-    dw["date"] = pd.to_datetime(dw["date"])
-    px["date"] = pd.to_datetime(px["date"])
+    ledger = execution_ledger
+    if ledger is None and trades is not None:
+        candidate = trades.attrs.get("daily_ledger")
+        if isinstance(candidate, pd.DataFrame):
+            ledger = candidate
 
-    # --- Stock-level daily returns ---
-    px = px.sort_values(["ticker", "date"])
-    px["stock_ret"] = px.groupby("ticker")["adj_close"].pct_change()
+    if ledger is None:
+        # Keep the public gross-only behaviour when no trade list is supplied:
+        # execute the target path without trading charges, but retain borrow and
+        # the same mark-then-trade timing used by the main simulator.
+        simulation_model = cost_model
+        if trades is None:
+            simulation_model = replace(
+                cost_model,
+                commission_per_share=0.0,
+                commission_pct=0.0,
+                commission_min=0.0,
+                slippage_bps=0.0,
+                impact_coeff=0.0,
+                sec_fee_rate=0.0,
+                finra_taf_per_share=0.0,
+                stamp_duty_pct=0.0,
+                max_participation_rate=None,
+            )
+        from quant_platform.core.execution.backtest.vectorized_daily import (
+            simulate_execution,
+        )
 
-    # Merge weights with returns
-    merged = dw.merge(px[["date", "ticker", "stock_ret"]], on=["date", "ticker"], how="left")
-    merged["stock_ret"] = merged["stock_ret"].fillna(0.0)
+        _, ledger = simulate_execution(
+            daily_weights=daily_weights,
+            prices=prices,
+            cost_model=simulation_model,
+            initial_capital=initial_capital,
+            return_daily_ledger=True,
+        )
 
-    # Weighted return per stock
-    merged["contrib"] = merged["weight"] * merged["stock_ret"]
-
-    # --- Gross return ---
-    daily_gross = merged.groupby("date")["contrib"].sum()
-    daily_gross.name = "gross_ret"
-
-    # --- Trading cost per day ---
-    dates = sorted(daily_gross.index)
-    date_idx = pd.DatetimeIndex(dates, name="date")
-
-    if trades is not None and not trades.empty:
-        trades["date"] = pd.to_datetime(trades["date"])
-        daily_trade_cost = trades.groupby("date")["total_cost"].sum()
-    else:
-        daily_trade_cost = pd.Series(0.0, index=date_idx, name="total_cost")
-
-    daily_trade_cost = daily_trade_cost.reindex(date_idx, fill_value=0.0)
-
-    # --- Borrow exposure (short positions) ---
-    short_abs_weight_per_day = pd.Series(0.0, index=date_idx)
-    if (dw["weight"] < 0).any():
-        short_w = dw[dw["weight"] < 0].copy()
-        short_w["abs_weight"] = short_w["weight"].abs()
-        short_agg = short_w.groupby("date")["abs_weight"].sum()
-        short_abs_weight_per_day = short_agg.reindex(date_idx, fill_value=0.0)
-
-    # --- Assemble ---
-    result = pd.DataFrame(index=date_idx)
-    result["gross_ret"] = daily_gross.reindex(date_idx, fill_value=0.0)
-
-    # Express costs as fraction of NAV (not dollar)
-    # For the first day, use initial_capital; thereafter use running NAV
-    result["trading_cost_dollar"] = daily_trade_cost.values
-
-    # Build NAV series
-    nav_gross = [initial_capital]
-    nav_net = [initial_capital]
-    borrow_costs = []
-    total_costs = []
-    prev_navs = []
-    for i, dt in enumerate(result.index):
-        g = result["gross_ret"].iloc[i]
-        prev_nav = nav_net[-1]
-        borrow_notional = short_abs_weight_per_day.loc[dt] * prev_nav
-        borrow_cost = daily_borrow_cost(borrow_notional, cost_model)
-        tc = result["trading_cost_dollar"].iloc[i] + borrow_cost
-        prev_navs.append(prev_nav)
-        borrow_costs.append(borrow_cost)
-        total_costs.append(tc)
-        # Gross NAV
-        new_nav_g = nav_gross[-1] * (1 + g)
-        nav_gross.append(new_nav_g)
-        # Net NAV (subtract dollar cost)
-        new_nav_n = nav_net[-1] * (1 + g) - tc
-        nav_net.append(new_nav_n)
-
-    result["nav_gross"] = nav_gross[1:]
-    result["nav_net"] = nav_net[1:]
-    result["borrow_cost_dollar"] = borrow_costs
-    result["total_cost_dollar"] = total_costs
-    result["prev_nav_net"] = prev_navs
-
-    # Net return (including cost drag)
-    result["net_ret"] = result["nav_net"].pct_change()
-    result.loc[result.index[0], "net_ret"] = (
-        result["nav_net"].iloc[0] / initial_capital - 1.0
-    )
-
-    # Cost as fraction of NAV
-    result["trading_cost_bps"] = (
-        result["trading_cost_dollar"] / result["prev_nav_net"].replace(0, np.nan) * 10_000
-    )
-    result["borrow_cost_bps"] = (
-        result["borrow_cost_dollar"] / result["prev_nav_net"].replace(0, np.nan) * 10_000
-    )
-
-    # Drawdown
-    result["peak_gross"] = result["nav_gross"].cummax()
-    result["peak_net"] = result["nav_net"].cummax()
-    result["drawdown_gross"] = result["nav_gross"] / result["peak_gross"] - 1.0
-    result["drawdown_net"] = result["nav_net"] / result["peak_net"] - 1.0
-
-    # Clean up helper columns
-    result.drop(columns=["peak_gross", "peak_net", "prev_nav_net"], inplace=True)
+    result = ledger.copy()
+    result.index = pd.to_datetime(result.index)
+    result.index.name = "date"
+    required = {
+        "gross_ret",
+        "net_ret",
+        "trading_cost_dollar",
+        "borrow_cost_dollar",
+        "total_cost_dollar",
+        "trading_cost_bps",
+        "borrow_cost_bps",
+        "nav_gross",
+        "nav_net",
+        "drawdown_gross",
+        "drawdown_net",
+    }
+    if missing := required.difference(result.columns):
+        raise ValueError(f"execution_ledger missing columns: {sorted(missing)}")
 
     logger.info(
         "PnL computed: {} days, gross={:.2%} cum, net={:.2%} cum, max_dd={:.2%}",
         len(result),
-        result["nav_gross"].iloc[-1] / initial_capital - 1,
-        result["nav_net"].iloc[-1] / initial_capital - 1,
-        result["drawdown_net"].min(),
+        result["nav_gross"].iloc[-1] / initial_capital - 1 if len(result) else 0.0,
+        result["nav_net"].iloc[-1] / initial_capital - 1 if len(result) else 0.0,
+        result["drawdown_net"].min() if len(result) else 0.0,
     )
 
     return result
@@ -233,13 +191,25 @@ def performance_summary(
     def _ann_vol(series):
         return series.std() * np.sqrt(annualisation)
 
+    rf_per_period = (1.0 + risk_free_rate) ** (1.0 / annualisation) - 1.0
+
     def _sharpe(series):
-        vol = _ann_vol(series)
-        return _ann_ret(series) / vol if vol > 0 else np.nan
+        excess = series.dropna() - rf_per_period
+        volatility = excess.std(ddof=1)
+        return (
+            excess.mean() / volatility * np.sqrt(annualisation)
+            if volatility > 0
+            else np.nan
+        )
 
     def _sortino(series):
-        downside = series[series < 0].std() * np.sqrt(annualisation)
-        return _ann_ret(series) / downside if downside > 0 else np.nan
+        excess = series.dropna() - rf_per_period
+        downside = np.sqrt(np.mean(np.minimum(excess, 0.0) ** 2))
+        return (
+            excess.mean() / downside * np.sqrt(annualisation)
+            if downside > 0
+            else np.nan
+        )
 
     def _calmar(series, dd_series):
         max_dd = dd_series.min()

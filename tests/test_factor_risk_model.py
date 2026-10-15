@@ -261,12 +261,10 @@ def test_decompose_risk_empty_weights():
     # Empty weights (no overlap)
     weights = pd.Series({"B": 1.0})  # Stock B not in model
     
-    decomp = model.decompose_risk(weights)
-    
-    # Should return zeros
-    assert decomp["total_risk"] == 0.0
-    assert decomp["factor_risk"] == 0.0
-    assert decomp["specific_risk"] == 0.0
+    # Missing coverage must fail closed; silently returning zero materially
+    # understates risk.
+    with pytest.raises(ValueError, match="B"):
+        model.decompose_risk(weights)
 
 
 # ===================================================================

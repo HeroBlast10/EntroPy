@@ -70,13 +70,14 @@ class MarketDataManager:
           2 = Frozen (last close if live unavailable)
           3 = Delayed (15-min delay, free for paper accounts)
           4 = Delayed-Frozen
-        Paper accounts almost always need type 3.
+        Requested type does not prove entitlement; inspect the returned type.
         """
         ib = self._gw.ib
         # Request delayed data (free) so paper accounts get prices without
         # a live-data subscription; falls back to live if available.
-        ib.reqMarketDataType(3)
-        logger.info("Market data type set to 3 (delayed, 15-min)")
+        data_type = self._gw.cfg.market_data_type
+        ib.reqMarketDataType(data_type)
+        logger.info("Requested market data type {}", data_type)
 
         for sym in symbols:
             if sym in self._tickers:
@@ -120,7 +121,10 @@ class MarketDataManager:
         bid = _safe_float(ticker.bid)
         ask = _safe_float(ticker.ask)
         last = _safe_float(ticker.last)
-        mid = (bid + ask) / 2 if bid and ask else last
+        bid = bid if bid is not None and bid > 0 else None
+        ask = ask if ask is not None and ask > 0 else None
+        last = last if last is not None and last > 0 else None
+        mid = (bid + ask) / 2 if bid and ask and ask >= bid else last
 
         return {
             "symbol": symbol,
@@ -135,6 +139,7 @@ class MarketDataManager:
             "low": _safe_float(ticker.low),
             "close": _safe_float(ticker.close),
             "time": ticker.time,
+            "market_data_type": ticker.marketDataType,
         }
 
     def snapshot_all(self) -> pd.DataFrame:
@@ -180,6 +185,7 @@ class MarketDataManager:
             whatToShow=what_to_show,
             useRTH=True,
             formatDate=1,
+            timeout=self._gw.cfg.timeout,
         )
 
         if not bars:
@@ -208,6 +214,6 @@ def _safe_float(val) -> Optional[float]:
         return None
     try:
         f = float(val)
-        return None if math.isnan(f) else f
+        return None if not math.isfinite(f) or abs(f) >= 1e100 else f
     except (TypeError, ValueError):
         return None

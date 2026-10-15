@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Dict, Iterable, Optional
 
 import numpy as np
@@ -63,6 +64,161 @@ def white_reality_check(
     return result
 
 
+def hansen_spa_test(
+    long_short_returns: Dict[str, pd.Series],
+    *,
+    n_boot: int = 1000,
+    block_length: Optional[int] = None,
+    random_state: int = 42,
+) -> Dict[str, object]:
+    """Hansen (2005) Superior Predictive Ability (SPA) test.
+
+    Tests the null hypothesis "no candidate strategy outperforms the
+    benchmark of zero return" while correctly handling multiple comparisons.
+    Hansen's improvement over White's Reality Check is the **studentisation**
+    and the **threshold ``A`` truncation** that prevents poor strategies from
+    biasing the limit distribution downward, which inflates the p-value.
+
+    Three p-values are reported (Hansen 2005, Section 3); they obey the
+    asymptotic ordering ``p_l <= p_c <= p_u``:
+
+    - ``spa_pvalue_l`` (lower bound, most powerful):  recenters only
+      strategies with **positive** sample mean.  Bad strategies stay bad in
+      the bootstrap and contribute zero to the bootstrap max, giving the
+      smallest bootstrap distribution and the smallest p-value.
+    - ``spa_pvalue_c`` (consistent, recommended for practical use):
+      recenters strategies whose mean exceeds the Hansen threshold
+      ``-sqrt(2 * sigma^2 / n * log log n)``.  Asymptotically correct.
+    - ``spa_pvalue_u`` (upper bound, equals White's Reality Check):
+      recenters every strategy.  Most conservative — bad strategies are
+      treated as if they had zero mean and inflate the bootstrap max.
+
+    Stationary block bootstrap (Politis & Romano 1994) is used to preserve
+    short-run dependence in the return series.
+
+    Parameters
+    ----------
+    long_short_returns : ``{factor_name: daily LS return series}``.
+    n_boot : number of bootstrap resamples (1000 is sufficient for 5%
+        significance level testing).
+    block_length : expected stationary block length (geometric distribution
+        mean).  Defaults to ``floor(n^(1/3))`` per Politis-White.
+    random_state : RNG seed.
+
+    Returns
+    -------
+    Dict with:
+        - ``spa_pvalue_l``, ``spa_pvalue_c``, ``spa_pvalue_u``: SPA p-values
+        - ``best_strategy``: name with the highest studentised mean
+        - ``test_statistic``: ``max(0, sqrt(n) * max_k(mean_k / sigma_k))``
+        - ``n_strategies``, ``n_obs``, ``block_length``
+    """
+    cleaned = {
+        name: ret.dropna().astype(float)
+        for name, ret in long_short_returns.items()
+        if ret is not None and len(ret.dropna()) > 10
+    }
+    if not cleaned:
+        return {
+            "spa_pvalue_l": np.nan,
+            "spa_pvalue_c": np.nan,
+            "spa_pvalue_u": np.nan,
+            "best_strategy": None,
+            "test_statistic": np.nan,
+            "n_strategies": 0,
+            "n_obs": 0,
+        }
+
+    panel = pd.concat(cleaned, axis=1).dropna(how="all").fillna(0.0)
+    names = list(panel.columns)
+    values = panel.to_numpy(dtype=float)  # (n, k)
+    n, k = values.shape
+    if n < 20 or k < 1:
+        return {
+            "spa_pvalue_l": np.nan,
+            "spa_pvalue_c": np.nan,
+            "spa_pvalue_u": np.nan,
+            "best_strategy": None,
+            "test_statistic": np.nan,
+            "n_strategies": int(k),
+            "n_obs": int(n),
+        }
+
+    if block_length is None:
+        block_length = max(2, int(np.floor(n ** (1.0 / 3.0))))
+
+    means = values.mean(axis=0)  # (k,)
+    # Use a HAC-style sample variance to studentise: simple unbiased var here;
+    # the bootstrap itself absorbs serial dependence via stationary blocks.
+    variances = values.var(axis=0, ddof=1)
+    variances = np.where(variances > 0, variances, 1e-12)
+    omega = np.sqrt(variances)  # (k,)
+
+    sqrt_n = math.sqrt(n)
+    studentised = sqrt_n * means / omega
+    test_stat = float(max(0.0, np.max(studentised)))
+    best_idx = int(np.argmax(studentised))
+
+    # Hansen (2005) threshold for "viable" strategies (eq. 8 of the paper).
+    # Mean must exceed -A_n to be treated as a credible competitor.
+    if n > 3 and math.log(n) > 1:
+        A_n = -np.sqrt(omega ** 2 / n * 2.0 * math.log(math.log(n)))
+    else:
+        A_n = -np.full(k, np.inf)
+
+    # Recentering vectors. Whether a strategy contributes to the bootstrap
+    # max under the null is controlled by g_k:
+    #   bootstrap statistic = sqrt(n) * (boot_mean_k - g_k) / sigma_k
+    # If g_k = mean_k → bootstrap is centered at zero → strategy fully
+    # recentered. If g_k = 0 → bootstrap retains the (negative) observed
+    # mean → strategy contributes zero to max(0, ...) → effectively dropped.
+    g_l = np.where(means > 0, means, 0.0)            # lower bound (most powerful)
+    g_c = np.where(means >= A_n, means, 0.0)          # consistent
+    g_u = means.copy()                                # upper bound = White's RC
+
+    rng = np.random.default_rng(random_state)
+    boot_stats_l = np.empty(n_boot)
+    boot_stats_c = np.empty(n_boot)
+    boot_stats_u = np.empty(n_boot)
+
+    # Stationary bootstrap indices: avg block length = block_length
+    p_geom = 1.0 / float(block_length)
+    for b in range(n_boot):
+        idx = _stationary_bootstrap_indices(n, p_geom, rng)
+        sample = values[idx]                        # (n, k)
+        boot_means = sample.mean(axis=0)
+        boot_stud_l = sqrt_n * (boot_means - g_l) / omega
+        boot_stud_c = sqrt_n * (boot_means - g_c) / omega
+        boot_stud_u = sqrt_n * (boot_means - g_u) / omega
+        boot_stats_l[b] = max(0.0, float(np.max(boot_stud_l)))
+        boot_stats_c[b] = max(0.0, float(np.max(boot_stud_c)))
+        boot_stats_u[b] = max(0.0, float(np.max(boot_stud_u)))
+
+    return {
+        "spa_pvalue_l": float((boot_stats_l >= test_stat).mean()),
+        "spa_pvalue_c": float((boot_stats_c >= test_stat).mean()),
+        "spa_pvalue_u": float((boot_stats_u >= test_stat).mean()),
+        "best_strategy": names[best_idx],
+        "test_statistic": test_stat,
+        "n_strategies": int(k),
+        "n_obs": int(n),
+        "block_length": int(block_length),
+    }
+
+
+def _stationary_bootstrap_indices(n: int, p: float, rng: np.random.Generator) -> np.ndarray:
+    """Politis-Romano (1994) stationary bootstrap index generator."""
+    idx = np.empty(n, dtype=np.int64)
+    idx[0] = int(rng.integers(0, n))
+    new_block = rng.random(n) < p
+    for t in range(1, n):
+        if new_block[t]:
+            idx[t] = int(rng.integers(0, n))
+        else:
+            idx[t] = (idx[t - 1] + 1) % n
+    return idx
+
+
 def apply_multiple_testing_controls(
     comparison: pd.DataFrame,
     tearsheets: Optional[Dict[str, Dict]] = None,
@@ -99,6 +255,22 @@ def apply_multiple_testing_controls(
         if ls_rets:
             result["white_reality_pvalue"] = white_reality_check(ls_rets).reindex(result.index)
             result["white_reality_pass_10pct"] = result["white_reality_pvalue"] <= alpha
+
+            try:
+                spa = hansen_spa_test(ls_rets)
+                # The SPA p-values are joint statistics (single value per universe of strategies);
+                # we attach them as columns broadcast to all rows so they survive a CSV roundtrip.
+                result["spa_pvalue_l"] = spa.get("spa_pvalue_l", np.nan)
+                result["spa_pvalue_c"] = spa.get("spa_pvalue_c", np.nan)
+                result["spa_pvalue_u"] = spa.get("spa_pvalue_u", np.nan)
+                result["spa_best_strategy"] = spa.get("best_strategy")
+                result["spa_pass_10pct"] = bool(
+                    pd.notna(spa.get("spa_pvalue_c"))
+                    and float(spa["spa_pvalue_c"]) <= alpha
+                )
+            except Exception:
+                # SPA is optional; do not break the screening pipeline
+                pass
 
     return result
 

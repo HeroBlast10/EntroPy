@@ -93,6 +93,22 @@ def test_purged_kfold_embargo():
         assert gap > 0  # There should be a gap
 
 
+def test_purged_kfold_never_splits_a_cross_section_and_respects_horizon():
+    dates = pd.bdate_range("2023-01-02", periods=40)
+    repeated = pd.DatetimeIndex(dates.repeat(7))
+    X = pd.DataFrame({"feature": np.arange(len(repeated))}, index=repeated)
+    splitter = PurgedKFold(
+        n_splits=3,
+        embargo_pct=0.0,
+        horizon=3,
+    )
+    for train_idx, test_idx in splitter.split(X):
+        train_dates = pd.DatetimeIndex(X.index[train_idx]).unique()
+        test_dates = pd.DatetimeIndex(X.index[test_idx]).unique()
+        assert set(train_dates).isdisjoint(test_dates)
+        assert dates.get_loc(test_dates.min()) - dates.get_loc(train_dates.max()) == 4
+
+
 # ===================================================================
 # MLAlphaModel tests
 # ===================================================================
@@ -349,6 +365,54 @@ def test_ml_alpha_with_no_data():
     
     # Should not crash, but model won't be fitted
     # (fit() logs warning and returns self)
+
+
+def test_ml_alpha_all_missing_features_keeps_fit_contract():
+    dates = pd.to_datetime(["2024-01-02", "2024-01-02"])
+    factors = pd.DataFrame({
+        "date": dates,
+        "ticker": ["A", "B"],
+        "f1": [np.nan, np.nan],
+    })
+    returns = pd.Series(
+        [0.01, 0.02],
+        index=pd.MultiIndex.from_arrays(
+            [dates, ["A", "B"]],
+            names=["date", "ticker"],
+        ),
+    )
+    model = MLAlphaModel()
+    assert model.fit(factors, returns) is model
+    assert model.model_ is None
+
+
+def test_ml_alpha_rejects_ambiguous_positional_target_alignment():
+    factors = pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-02"]),
+        "ticker": ["A", "B"],
+        "f1": [1.0, 2.0],
+    })
+    shuffled_target = pd.Series([0.02, 0.01], index=[1, 0])
+    with pytest.raises(ValueError, match="same index"):
+        MLAlphaModel().fit(factors, shuffled_target)
+
+
+def test_ml_alpha_rejects_duplicate_factor_keys():
+    date = pd.Timestamp("2024-01-02")
+    factors = pd.DataFrame({
+        "date": [date, date],
+        "ticker": ["A", "A"],
+        "f1": [1.0, 2.0],
+    })
+    target = pd.Series(
+        [0.01],
+        index=pd.MultiIndex.from_tuples(
+            [(date, "A")],
+            names=["date", "ticker"],
+        ),
+    )
+    with pytest.raises(ValueError, match="duplicate date/ticker"):
+        MLAlphaModel().fit(factors, target)
 
 
 def test_regularization_strength():

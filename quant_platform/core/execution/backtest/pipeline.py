@@ -25,6 +25,9 @@ from quant_platform.core.utils.io import load_config, load_parquet, resolve_data
 
 def run_trading_pipeline(
     weights_path: Optional[Path | str] = None,
+    prices_path: Optional[Path | str] = None,
+    weights_override: Optional[pd.DataFrame] = None,
+    prices_override: Optional[pd.DataFrame] = None,
     cost_model: Optional[CostModel] = None,
     initial_capital: float = 1_000_000.0,
     output_dir: Optional[Path | str] = None,
@@ -39,6 +42,9 @@ def run_trading_pipeline(
     ----------
     weights_path : path to daily portfolio weights Parquet.
         If ``None``, uses the most recent file in ``data/portfolio/``.
+    prices_path : optional price Parquet; defaults to the configured price data.
+    weights_override, prices_override : in-memory inputs.  When supplied they
+        take precedence over the corresponding paths.
     cost_model : transaction cost parameters.
     initial_capital : starting portfolio value ($).
     output_dir : directory for all output artefacts.
@@ -54,7 +60,7 @@ def run_trading_pipeline(
         cost_model = CostModel()
 
     # --- Load weights ---
-    if weights_path is None:
+    if weights_override is None and weights_path is None:
         portfolio_dir = resolve_data_path("portfolio")
         if not portfolio_dir.exists():
             raise FileNotFoundError(f"Portfolio directory not found: {portfolio_dir}")
@@ -71,8 +77,19 @@ def run_trading_pipeline(
                 if weights_path.exists():
                     logger.info("Loaded weights from metadata: {}", weights_path)
                 else:
-                    logger.warning("Metadata references missing file: {}", weights_path)
-                    weights_path = None
+                    full_path = metadata.get("weights_path")
+                    full_candidate = Path(full_path) if full_path else None
+                    if full_candidate is not None and full_candidate.exists():
+                        weights_path = full_candidate
+                        logger.info(
+                            "Loaded custom weights path from metadata: {}",
+                            weights_path,
+                        )
+                    else:
+                        logger.warning(
+                            "Metadata references missing file: {}", weights_path
+                        )
+                        weights_path = None
         
         # Fallback to sorted glob if metadata not available
         if weights_path is None:
@@ -82,23 +99,33 @@ def run_trading_pipeline(
             weights_path = parquets[-1]
             logger.warning("Auto-detected weights via glob (fragile): {}", weights_path)
 
-    weights = load_parquet(weights_path)
+    weights = (
+        weights_override.copy()
+        if weights_override is not None
+        else load_parquet(weights_path)
+    )
     weights["date"] = pd.to_datetime(weights["date"])
 
     # --- Load prices ---
-    prices_path = resolve_data_path(cfg["paths"]["prices_dir"], "prices.parquet")
-    prices = load_parquet(prices_path)
+    if prices_override is None and prices_path is None:
+        prices_path = resolve_data_path(cfg["paths"]["prices_dir"], "prices.parquet")
+    prices = (
+        prices_override.copy()
+        if prices_override is not None
+        else load_parquet(prices_path)
+    )
     prices["date"] = pd.to_datetime(prices["date"])
 
     # --- Simulate execution ---
     logger.info("Simulating execution with cost model: slippage={} bps, impact_coeff={}",
                 cost_model.slippage_bps, cost_model.impact_coeff)
 
-    trades = simulate_execution(
+    trades, execution_ledger = simulate_execution(
         daily_weights=weights,
         prices=prices,
         cost_model=cost_model,
         initial_capital=initial_capital,
+        return_daily_ledger=True,
     )
 
     # --- Compute PnL ---
@@ -108,6 +135,7 @@ def run_trading_pipeline(
         trades=trades,
         cost_model=cost_model,
         initial_capital=initial_capital,
+        execution_ledger=execution_ledger,
     )
 
     # --- Cost attribution ---
@@ -163,11 +191,9 @@ def run_trading_pipeline(
     # Save backtest metadata for artifact lineage
     import json
     bt_meta = {
-        "weights_path": str(weights_path),
-        "cost_model": {
-            "slippage_bps": cost_model.slippage_bps,
-            "impact_coeff": cost_model.impact_coeff,
-        },
+        "weights_path": str(weights_path) if weights_path is not None else "<dataframe>",
+        "prices_path": str(prices_path) if prices_path is not None else "<dataframe>",
+        "cost_model": cost_model.describe(),
         "initial_capital": initial_capital,
         "benchmark_market": benchmark_market,
         "benchmark_path": str(benchmark_path) if benchmark_path else None,
@@ -176,7 +202,13 @@ def run_trading_pipeline(
         "end_date": perf.get("end_date"),
     }
     # Carry forward signal_col from portfolio metadata if available
-    portfolio_meta_path = resolve_data_path("portfolio", "metadata.json")
+    portfolio_meta_path = (
+        Path(weights_path).with_suffix(".metadata.json")
+        if weights_path is not None
+        else resolve_data_path("portfolio", "metadata.json")
+    )
+    if not portfolio_meta_path.exists():
+        portfolio_meta_path = resolve_data_path("portfolio", "metadata.json")
     if portfolio_meta_path.exists():
         try:
             pmeta = json.loads(portfolio_meta_path.read_text(encoding="utf-8"))

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -44,6 +45,7 @@ class PaperTradingStrategy:
     """
 
     def __init__(self, config: PaperTradingConfig):
+        config.validate()
         self.cfg = config
         self.gateway = IBGateway(config.ib)
         self.risk_mgr = RiskManager(config.risk)
@@ -80,6 +82,7 @@ class PaperTradingStrategy:
             self.md = MarketDataManager(self.gateway)
             self.orders = OrderManager(self.gateway, self.risk_mgr, self.cfg)
             self.portfolio = PortfolioTracker(self.gateway)
+            self.portfolio.subscribe_pnl()
 
             # Subscribe to market data
             self.md.subscribe(self.cfg.strategy.tickers)
@@ -89,8 +92,7 @@ class PaperTradingStrategy:
             self.gateway.sleep(5)
 
             # Log account info
-            nlv = self.gateway.net_liquidation()
-            logger.info("Account NLV: ${:,.0f}", nlv)
+            logger.info("Account base currency: {}", self.gateway.base_currency())
 
             # Main loop
             self._running = True
@@ -122,16 +124,26 @@ class PaperTradingStrategy:
         """Clean up: cancel orders, unsubscribe, disconnect, save logs."""
         logger.info("Shutting down...")
 
-        if self.orders:
-            self.orders.cancel_all()
-            self.orders.save_fill_log()
-
-        if self.md:
-            self.md.unsubscribe_all()
-
-        self.gateway.disconnect()
-        self._save_state()
-        self._running = False
+        try:
+            if self.orders:
+                try:
+                    if self.gateway.is_connected:
+                        self.orders.cancel_all()
+                finally:
+                    self.orders.save_fill_log()
+        finally:
+            try:
+                if self.gateway.is_connected:
+                    try:
+                        if self.md:
+                            self.md.unsubscribe_all()
+                    finally:
+                        if self.portfolio:
+                            self.portfolio.close()
+            finally:
+                self.gateway.disconnect()
+                self._save_state()
+                self._running = False
         logger.info("Shutdown complete")
 
     def stop(self) -> None:
@@ -165,16 +177,35 @@ class PaperTradingStrategy:
         prices = {}
         for _, row in snapshots.iterrows():
             sym = row["symbol"]
-            mid = row.get("mid") or row.get("last")
-            if mid and mid > 0:
+            mid = row.get("mid")
+            if mid is not None and math.isfinite(mid) and mid > 0:
                 prices[sym] = mid
 
         self._target_weights = self._compute_signal(prices)
+        if not self._target_weights:
+            logger.info("No explicit valid weights — skipping rebalance")
+            return
         logger.info("Target weights: {}", {k: f"{v:.2%}" for k, v in
                      self._target_weights.items()})
 
         # 3) Compute rebalance trades
         capital = self.cfg.strategy.target_capital
+        pnl = self.portfolio.pnl_summary()
+        # Account PnL is in base currency; USD risk limits cannot use HKD values.
+        self.risk_mgr.update_daily_pnl(pnl["daily_pnl"] if pnl["currency"] == "USD" else None)
+        submitting = self.cfg.strategy.enable_paper_orders
+        if submitting:
+            if pnl["currency"] != "USD":
+                raise ValueError("Paper order mode requires USD base currency for USD loss limits.")
+            capital = min(capital, self.gateway.net_liquidation("USD"))
+            now = dt.datetime.now(dt.timezone.utc)
+            for _, row in snapshots.iterrows():
+                if row["symbol"] not in self._target_weights:
+                    continue
+                quote_time = row.get("time")
+                age = (now - quote_time).total_seconds() if quote_time is not None and not pd.isna(quote_time) and quote_time.tzinfo else float("inf")
+                if row["market_data_type"] != 1 or not 0 <= age <= 120:
+                    raise ValueError("Paper orders require fresh real-time quotes; delayed/frozen quotes are diagnostic only.")
         rebal_orders = self.portfolio.compute_rebalance(
             self._target_weights, prices, capital,
         )
@@ -213,9 +244,9 @@ class PaperTradingStrategy:
         logger.info("\n{}", self.portfolio.status_report())
         logger.info("Risk status: {}", self.risk_mgr.status())
 
-        # 7) Update risk with unrealised PnL
+        # 7) Refresh the broker's daily PnL
         pnl = self.portfolio.pnl_summary()
-        self.risk_mgr.update_unrealised_pnl(pnl.get("unrealised_pnl", 0.0) or 0.0)
+        self.risk_mgr.update_daily_pnl(pnl["daily_pnl"] if pnl["currency"] == "USD" else None)
 
         self._log_cycle(cycle_ts, snapshots, rebal_orders)
 
@@ -224,12 +255,8 @@ class PaperTradingStrategy:
     # ------------------------------------------------------------------
 
     def _compute_signal(self, prices: Dict[str, float]) -> Dict[str, float]:
-        """Compute target weights from factor signals or simple heuristic.
-
-        For the demo: equal-weight the tickers that have valid prices.
-        In production, this would pull factor values and rank them.
-        """
-        valid = {k: v for k, v in prices.items() if v and v > 0}
+        """Load explicit reviewed weights; missing signals never trigger buying."""
+        valid = {k: v for k, v in prices.items() if v is not None and math.isfinite(v) and v > 0}
         if not valid:
             return {}
 
@@ -238,41 +265,44 @@ class PaperTradingStrategy:
         if target:
             return target
 
-        # Fallback: equal weight across all subscribed tickers
-        n = len(valid)
-        return {sym: 1.0 / n for sym in valid}
+        return {}
 
     def _load_factor_weights(self, prices: Dict[str, float]) -> Optional[Dict[str, float]]:
-        """Attempt to load factor-based weights from the most recent portfolio file."""
+        """Validate the explicit dated weights file without renormalising cash."""
         try:
-            from quant_platform.core.utils.io import resolve_data_path, load_parquet
+            from quant_platform.core.utils.io import load_parquet
 
-            portfolio_dir = resolve_data_path("portfolio")
-            if not portfolio_dir.exists():
+            if not self.cfg.strategy.weights_file:
                 return None
-
-            weight_files = sorted(portfolio_dir.glob("weights_*.parquet"))
-            if not weight_files:
-                return None
-
-            df = load_parquet(weight_files[-1])
+            path = Path(self.cfg.strategy.weights_file)
+            df = load_parquet(path)
             df["date"] = pd.to_datetime(df["date"])
             latest_date = df["date"].max()
+            from quant_platform.core.execution.paper.ibkr.risk import trading_date
+            age = (trading_date() - latest_date.date()).days
+            if not 0 <= age <= self.cfg.strategy.max_weights_age_days:
+                raise ValueError("Weights are future-dated or stale.")
             latest = df[df["date"] == latest_date]
+            if latest["ticker"].duplicated().any():
+                raise ValueError("Duplicate tickers in weights file.")
 
             weights = {}
             for _, row in latest.iterrows():
                 tkr = row["ticker"]
+                w = float(row["weight"])
+                if not math.isfinite(w) or w < 0:
+                    raise ValueError("Weights must be finite and nonnegative.")
+                if w > 0 and tkr not in prices:
+                    raise ValueError("A target ticker has no valid subscribed quote.")
                 if tkr in prices:
-                    weights[tkr] = row["weight"]
+                    weights[tkr] = w
 
             if weights:
-                # Renormalise
                 total = sum(weights.values())
-                if total > 0:
-                    weights = {k: v / total for k, v in weights.items()}
+                if total > 1.0 + 1e-8:
+                    raise ValueError("Weights exceed 100%; leverage is disabled.")
                 logger.info("Loaded factor weights from {} ({})",
-                            weight_files[-1].name, latest_date.date())
+                            path.name, latest_date.date())
                 return weights
         except Exception as exc:
             logger.debug("Factor weight load failed: {}", exc)

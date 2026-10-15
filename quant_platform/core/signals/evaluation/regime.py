@@ -61,7 +61,8 @@ class RegimeScorecard:
         if baseline_returns is None:
             prices = prices.copy()
             prices = prices.sort_values(["ticker", "date"])
-            prices["ret"] = prices.groupby("ticker")["close"].pct_change()
+            price_col = "adj_close" if "adj_close" in prices.columns else "close"
+            prices["ret"] = prices.groupby("ticker")[price_col].pct_change()
             baseline_returns = prices.groupby("date")["ret"].mean()
         
         # Get regime signal (aggregate across tickers if needed)

@@ -6,11 +6,12 @@
 
 EntroPy 用于检验状态空间、市场状态、熵、均值回复与传统横截面因子，是否能在点时间数据、滚动样本外验证、真实交易成本和容量约束下产生稳健可交易 alpha。
 
-[English README](README.md) | [升级说明](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md)
+[English README](README.md) | [升级说明](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md) | [因子词典（初学者版）](docs/factor_dictionary_beginner.md)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-172%20passed-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-297%20passed-brightgreen.svg)](#测试)
+[![Factors](https://img.shields.io/badge/factors-42个注册因子-orange.svg)](#因子库)
 
 </div>
 
@@ -202,6 +203,24 @@ python scripts/tune_factors.py --objective ric_icir --top 5
 - 不同资金规模下的成本弹性。
 - 不同资金规模下的 estimated net Sharpe。
 
+## Jupyter Notebook 端到端演示
+
+`notebooks/factor_research_walkthrough.ipynb` 是一个可以直接运行的完整演示：
+
+1. 合成价格面板（可替换为真实数据）
+2. 通过因子注册表批量计算 8 个代表性因子
+3. 单因子 tearsheet：NW HAC t-stat、半衰期、多/空腿归因
+4. 多重检验控制：FDR、Hansen SPA、完整 CSCV
+5. 层次聚类冗余剔除
+6. 多因子组合器对比（4 种方法，OOS Sharpe）
+7. 每个因子的生产就绪评分（PRS）
+8. 生成 HTML Tearsheet 和 Decision Story 报告
+
+```bash
+cd notebooks
+jupyter notebook factor_research_walkthrough.ipynb
+```
+
 ## 项目结构
 
 ```text
@@ -209,20 +228,28 @@ quant_platform/
 ├── core/
 │   ├── data/                  # PIT 数据、日历、股票池、benchmark、行业映射
 │   ├── signals/               # 因子基类、注册表、effective signal、筛选、冗余剔除
-│   │   ├── cross_sectional/    # 动量、波动、流动性、价值/质量因子
+│   │   ├── cross_sectional/    # 32 个截面因子：动量、波动、流动性、价值/质量
+│   │   │   evaluation.py       # ★ NW HAC IC、半衰期、L/S 腿归因、截面稳定性
 │   │   ├── time_series/        # Kalman、entropy、Hurst、高阶矩
 │   │   ├── regime/             # HMM turbulence probability
 │   │   ├── relative_value/     # OU 均值回复特征
 │   │   └── evaluation/         # 不同类型因子的评估 scorecard
+│   │   factor_selection.py     # ★ Hansen SPA test、FDR、可部署性过滤
+│   │   redundancy.py           # ★ 层次聚类冗余剔除
 │   ├── alpha_models/           # Ranker、ML alpha、regime overlay、多因子组合器
 │   ├── portfolio/              # 分层组合、优化器、约束、风险模型、pipeline
 │   ├── execution/              # 成本模型、向量化回测、PnL
-│   ├── evaluation/             # walk-forward、ablation、benchmark、capacity、report
+│   ├── evaluation/             # walk-forward、ablation、benchmark、capacity
+│   │   overfit.py              # ★ 完整组合 CSCV (Bailey et al. 2017)
+│   │   production_readiness.py # ★ 7 维生产就绪评分（PRS）
+│   │   tearsheet.py            # ★ 因子 Discovery Tearsheet（HTML）
+│   │   report_story.py         # ★ 多因子 Decision Story 报告（HTML）
 │   └── experiments/            # YAML experiment runner
 ├── experiments/                # 实验 YAML 配置
+├── notebooks/                  # ★ factor_research_walkthrough.ipynb（端到端演示）
 ├── scripts/                    # CLI 入口
-├── tests/                      # 单元测试和回归测试
-└── docs/                       # 设计与升级文档
+├── tests/                      # 297 个单元和回归测试
+└── docs/                       # 设计文档 + 因子词典（初学者版）
 ```
 
 ## 常用命令
@@ -238,6 +265,25 @@ quant_platform/
 | `python scripts/run_experiment.py` | 运行 YAML 实验 |
 | `python scripts/tune_factors.py` | 因子参数调优 |
 
+## IBKR 模拟连接与日频研究
+
+启动模拟 IB Gateway，使用端口 `4002`。默认配置
+`config/ibkr_paper.yaml` 保持只读、dry run，并关闭自动下单。
+登录凭据不应保存在仓库中。
+
+```bash
+python scripts/ibkr_diagnose.py --connect --history
+python scripts/ibkr_daily_research.py
+python scripts/ibkr_daily_research.py --offline
+```
+
+日频样本下载 8 只固定股票及 2 个基准约两年的日线，检查完整交易日，
+并生成动量、波动率和流动性指标。结果位于
+`data/research/ibkr_daily_pilot/`，生成数据、账户诊断及日志保留本地。
+该样本不是历史时点对齐的中小盘股票池，尚不能证明策略收益。
+独立的 `config/ibkr_paper_order_preview.yaml` 使用读写客户端，仍保持
+dry run 和自动提交关闭；券商权限与实际下单需单独验证。
+
 ## 测试
 
 ```bash
@@ -245,10 +291,10 @@ python -m compileall quant_platform scripts
 pytest -q
 ```
 
-最近验证结果：
+最近验证结果（Python 3.12，2026-10-14）：
 
 ```text
-172 passed
+297 passed
 ```
 
 ## 已知限制
@@ -256,13 +302,14 @@ pytest -q
 - 默认 US 股票池用动态市值和流动性过滤近似 large-cap index，不是官方历史 S&P 500 成分股。
 - 日频 OHLCV 无法捕捉日内执行和微观结构细节。
 - 因子风险模型相对商业 Barra 模型更紧凑。
-- White Reality Check 和 Deflated Sharpe 是轻量近似，主要用于研究卫生检查，不是完整学术复现包。
+- 完整 CSCV 和 Hansen SPA 为研究卫生检查工具，不是完整学术复现包。
 - 基本面数据质量依赖 SimFin 覆盖和报告滞后假设。
 - CN A 股支持包含配置和成本模型接口，但生产使用前仍需验证本地数据可得性和市场特有执行规则。
 
 ## 文档
 
 - [生产级因子研究升级说明](docs/PRODUCTION_FACTOR_RESEARCH_UPGRADE_2026_05.md)
+- [**因子词典（初学者版）**](docs/factor_dictionary_beginner.md) ← 新增，深度讲解每个因子的经济学直觉
 - [数据字典](docs/data_dictionary.md)
 - [因子字典](docs/factor_dictionary.md)
 - [组合字典](docs/portfolio_dictionary.md)

@@ -16,15 +16,20 @@ data:
   universe: "sp500"
   exchange: "XNYS"
 
+data_contract:
+  mode: "research"
+  allow_non_pit_research: true
+
 # --- Baseline: standard CS factors ---
 baseline:
   factors: ["MOM_12_1M", "STR_1M", "VOL_20D", "ILLIQ_AMIHUD"]
   portfolio:
     method: "quantile"
     mode: "long_short"
-    sector_neutral: true
     rebalance_freq: "M"
     n_quantiles: 5
+    # Historical PIT sector classifications are not bundled.
+    max_sector_weight: null
 
 # --- Advanced features: state-space / regime / entropy ---
 advanced_features:
@@ -41,14 +46,7 @@ advanced_features:
 
 # --- Alpha model ---
 alpha_model:
-  type: "ensemble"
   combiner: "orthogonal_incremental"
-  w_cs: 0.6
-  w_ts: 0.4
-  regime_overlay:
-    column: "HMM_TURBULENCE_PROB"
-    turbulence_threshold: 0.6
-    reduction_factor: 0.5
 
 multi_factor:
   method: "orthogonal_incremental"

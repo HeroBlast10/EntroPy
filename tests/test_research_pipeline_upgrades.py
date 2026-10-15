@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def test_effective_signal_flips_negative_direction_and_ranks():
@@ -133,6 +134,7 @@ def test_simulate_execution_sizes_trades_with_dynamic_nav():
         impact_coeff=0,
         sec_fee_rate=0,
         finra_taf_per_share=0,
+        max_participation_rate=None,
     )
 
     trades = simulate_execution(weights, prices, zero_cost, initial_capital=1_000.0)
@@ -163,8 +165,10 @@ def test_borrow_cost_uses_dynamic_nav():
 
     pnl = compute_daily_returns(weights, prices, trades=None, cost_model=model, initial_capital=1_000.0)
 
-    assert pnl["borrow_cost_dollar"].iloc[0] == 1.0
-    assert pnl["borrow_cost_dollar"].iloc[1] < pnl["borrow_cost_dollar"].iloc[0]
+    # The short is opened at the first close, so overnight borrow begins on
+    # the following session rather than being charged retroactively.
+    assert pnl["borrow_cost_dollar"].iloc[0] == 0.0
+    assert pnl["borrow_cost_dollar"].iloc[1] == 1.0
 
 
 def test_redundancy_selector_drops_duplicate_factor():
@@ -285,3 +289,81 @@ def test_experiment_config_collects_factor_and_regime_names():
     assert "MOM_12_1M" in factors
     assert "KF_VELOCITY" in factors
     assert collect_regime_col(cfg) == "HMM_TURBULENCE_PROB"
+
+
+def test_experiment_runner_validates_nested_config_and_fails_closed(tmp_path):
+    from quant_platform.core.experiments.runner import ExperimentRunner
+
+    runner = ExperimentRunner(
+        "quant_platform/experiments/us_signal_lab.yaml",
+        output_dir=tmp_path / "us",
+    )
+    assert runner.name == "us_signal_lab"
+
+    with pytest.raises(ValueError, match="execution section is not wired"):
+        ExperimentRunner(
+            "quant_platform/experiments/cn_signal_lab.yaml",
+            output_dir=tmp_path / "cn",
+        )
+
+    invalid = tmp_path / "invalid.yaml"
+    invalid.write_text(
+        """
+experiment:
+  name: invalid
+data_contract:
+  mode: research
+  allow_non_pit_research: true
+factors:
+  names: [MOM_12_1M]
+evaluation:
+  walkforward:
+    train_months: 36
+    silently_ignored_option: true
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Unsupported evaluation.walkforward fields"):
+        ExperimentRunner(invalid, output_dir=tmp_path / "invalid")
+
+
+def test_experiment_walkforward_filters_untradable_rows(
+    tmp_path,
+    monkeypatch,
+):
+    from quant_platform.core.experiments.runner import ExperimentRunner
+
+    runner = ExperimentRunner(
+        "quant_platform/experiments/us_signal_lab.yaml",
+        output_dir=tmp_path / "runner",
+    )
+    dates = pd.bdate_range("2024-01-02", periods=3)
+    factors = pd.DataFrame(
+        [
+            {"date": date, "ticker": ticker, "F": float(index)}
+            for date in dates
+            for index, ticker in enumerate(["A", "B"])
+        ]
+    )
+    prices = factors[["date", "ticker"]].copy()
+    prices["adj_close"] = 100.0
+    universe = factors[["date", "ticker"]].copy()
+    universe["pass_all_filters"] = universe["ticker"].eq("A")
+    captured = {}
+
+    def fake_walk_forward(frame, *_args, **_kwargs):
+        captured["frame"] = frame.copy()
+        return pd.DataFrame()
+
+    monkeypatch.setattr(
+        "quant_platform.core.evaluation.walkforward.run_walk_forward",
+        fake_walk_forward,
+    )
+    runner._run_walkforward_evaluation(
+        factors,
+        prices,
+        universe,
+        ["F"],
+        ["F"],
+    )
+    assert set(captured["frame"]["ticker"]) == {"A"}

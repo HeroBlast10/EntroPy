@@ -53,10 +53,17 @@ def main(config, output_dir, list_only, no_backtest):
     click.echo(f"  Output dir       : {result.output_dir}")
     click.echo(f"  Selected factors : {', '.join(result.selected_factors)}")
     if result.performance:
-        click.echo(f"  Net Sharpe       : {result.performance.get('net_sharpe', 0):.2f}")
-        click.echo(f"  Net ann return   : {result.performance.get('net_ann_return', 0):+.2%}")
+        if "walkforward_mean_oos_sharpe" in result.performance:
+            click.echo(
+                "  Walk-forward OOS Sharpe: "
+                f"{result.performance['walkforward_mean_oos_sharpe']:.2f}"
+            )
+        if "diagnostic_insample_net_sharpe" in result.performance:
+            click.echo(
+                "  Diagnostic in-sample net Sharpe: "
+                f"{result.performance['diagnostic_insample_net_sharpe']:.2f}"
+            )
 
 
 if __name__ == "__main__":
     main()
-

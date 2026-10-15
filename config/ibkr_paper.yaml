@@ -1,0 +1,33 @@
+# IB Gateway paper research profile. Contains no login credentials.
+# HKD budget: approximately 100,000. USD 12,000 is a provisional cap,
+# NOT a real-time FX conversion. Confirm USD cash before any later paper orders.
+ib:
+  host: "127.0.0.1"
+  port: 4002
+  client_id: 17
+  timeout: 15.0
+  readonly: true
+  account: ""  # auto-select only one DU paper account; never a live account
+  market_data_type: 3
+risk:
+  max_order_notional: 1200.0
+  max_order_shares: 500
+  max_position_notional: 1200.0
+  max_position_shares: 500
+  max_positions: 10
+  max_daily_loss: 120.0
+  max_daily_trades: 20
+  max_daily_notional: 3600.0
+  long_only: true
+strategy:
+  tickers: ["AAPL", "MSFT"]  # connectivity probes, not an investment universe
+  target_capital: 12000.0
+  rebalance_interval_sec: 86400
+  order_type: "LMT"
+  limit_offset_bps: 5.0
+  dry_run: true
+  enable_paper_orders: false
+  weights_file: ""
+  max_weights_age_days: 7
+log_dir: "data/live/logs"
+state_dir: "data/live/state"

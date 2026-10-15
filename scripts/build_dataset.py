@@ -66,7 +66,7 @@ def main(steps, start, end, tickers, verify):
 
     outputs = run_pipeline(steps=step_list, tickers=ticker_list, start=start, end=end)
 
-    click.echo("\n✓ Build complete. Outputs:")
+    click.echo("\nBuild complete. Outputs:")
     for name, path in outputs.items():
         click.echo(f"  {name:15s} → {path}")
 
