@@ -58,19 +58,10 @@ Thumbs.db
 venv/
 .venv/
 
-# Implementation notes / interview prep docs (not for public repo)
+# Internal notes / interview prep docs (never push to the public repo).
+# All such files live under local_docs/, including the 11 implementation /
+# prep markdown files moved there from the repo root on 2026-10-15.
 local_docs/
-ACCURACY_FIXES_SUMMARY.md
-BENCHMARK_IMPLEMENTATION.md
-BUGFIX_SUMMARY.md
-EVALUATION_SYSTEM_DESIGN.md
-FACTOR_RISK_MODEL_IMPLEMENTATION.md
-IMPROVEMENT_ROADMAP.md
-INVERSE_VOL_IMPLEMENTATION.md
-ML_ALPHA_IMPLEMENTATION.md
-RESUME_AND_INTERVIEW_PREP.md
-VALUE_QUALITY_IMPLEMENTATION.md
-VAR_CVAR_IMPLEMENTATION.md
 
-# Project docs
-docs/
+# Local agent / IDE workspace state (private working notes, never public)
+.workbuddy/
