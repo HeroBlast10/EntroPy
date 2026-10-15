@@ -110,18 +110,25 @@ def build_manifest(
     config_path = get_project_root() / "config" / "settings.yaml"
     config_hash = _file_hash(config_path) if config_path.exists() else "n/a"
 
-    # File checksums
+    # File checksums. xxHash stays for fast day-to-day verification; SHA-256 is
+    # recorded alongside it so a third party can verify against an independent
+    # implementation instead of trusting a non-cryptographic digest.
+    from quant_platform.core.utils.provenance import fingerprint
+
     checksums: Dict[str, str] = {}
+    sha256s: Dict[str, str] = {}
     for p in parquet_paths:
         p = Path(p)
         if p.exists():
             checksums[p.name] = _file_hash(p)
+            sha256s[p.name] = fingerprint(p)["sha256"]
 
     manifest: Dict[str, Any] = {
         "build_timestamp": now.isoformat(),
         "config_hash": config_hash,
         "git_head": _git_head_sha(),
         "file_checksums": checksums,
+        "file_sha256": sha256s,
         "row_counts": row_counts or {},
         "date_range": {
             "start": cfg["date_range"]["start"],

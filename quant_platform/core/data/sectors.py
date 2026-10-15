@@ -59,8 +59,17 @@ def load_sector_map(path: Optional[Path | str] = None) -> pd.DataFrame:
 def ensure_sector_map(
     tickers: Optional[Iterable[str]] = None,
     path: Optional[Path | str] = None,
+    allow_fetch: bool = True,
 ) -> pd.DataFrame:
-    """Load a cached sector map or fetch/build it when missing."""
+    """Load a cached sector map, optionally topped up from Wikipedia.
+
+    Parameters
+    ----------
+    allow_fetch:
+        When ``False`` never touch the network. This is what reproducible
+        runs use: the cached map is pinned and its hash recorded in the run
+        metadata, so results do not drift as index constituents change.
+    """
     path = Path(path) if path is not None else default_sector_map_path()
 
     sector_map = load_sector_map(path)
@@ -72,13 +81,29 @@ def ensure_sector_map(
         missing = set()
 
     if sector_map.empty or missing:
-        try:
-            fetched = fetch_sp500_sector_map()
-            if fetched is not None and not fetched.empty:
-                sector_map = fetched
-                save_parquet(sector_map, path)
-        except Exception as exc:
-            logger.warning("Sector map fetch failed: {}", exc)
+        if not allow_fetch:
+            logger.info(
+                "Sector map refresh disabled; {} ticker(s) stay unmapped",
+                len(missing),
+            )
+        else:
+            try:
+                fetched = fetch_sp500_sector_map()
+                if fetched is not None and not fetched.empty:
+                    if sector_map.empty:
+                        sector_map = fetched
+                    else:
+                        # Merge rather than replace: tickers that have left the
+                        # index keep their last known GICS sector instead of
+                        # silently losing it (and re-crashing) every refresh.
+                        sector_map = (
+                            pd.concat([sector_map, fetched], ignore_index=True)
+                            .drop_duplicates(subset=["ticker"], keep="first")
+                            .reset_index(drop=True)
+                        )
+                    save_parquet(sector_map, path)
+            except Exception as exc:
+                logger.warning("Sector map fetch failed: {}", exc)
 
     if requested and not sector_map.empty:
         sector_map = sector_map[sector_map["ticker"].isin(requested)].copy()

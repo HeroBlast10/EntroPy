@@ -48,7 +48,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT / "data/experiments/nonlinear_alpha_20260726",
+        default=ROOT / "data/experiments/nonlinear_alpha",
     )
     parser.add_argument("--models", nargs="+", choices=["lightgbm", "mlp"], default=["lightgbm", "mlp"])
     parser.add_argument("--horizon", type=int, default=1)
@@ -157,7 +157,6 @@ def main() -> None:
         or args.lightgbm_max_train_rows < 0
     ):
         raise ValueError("horizons, folds, trees and epochs must be positive")
-    args.output.mkdir(parents=True, exist_ok=True)
     factors = pd.read_parquet(args.factors)
     universe = pd.read_parquet(args.universe)
     import pyarrow.parquet as pq
@@ -189,13 +188,17 @@ def main() -> None:
         min_coverage=0.80,
         return_diagnostics=True,
     )
+    if "MOM_12_1M" in factors.columns and "MOM_12_1M" not in feature_cols:
+        raise ValueError("MOM_12_1M is not usable on the locked training schema")
+    # Validate before touching the filesystem. The previous ordering wrote the
+    # diagnostics first, so any later contract violation overwrote a previous
+    # run's artifact with a partial output and left no record that it failed.
+    _validate_point_in_time_contract(args, feature_cols, universe)
+    args.output.mkdir(parents=True, exist_ok=True)
     feature_diagnostics.to_csv(
         args.output / "feature_selection_diagnostics.csv",
         index=False,
     )
-    if "MOM_12_1M" in factors.columns and "MOM_12_1M" not in feature_cols:
-        raise ValueError("MOM_12_1M is not usable on the locked training schema")
-    _validate_point_in_time_contract(args, feature_cols, universe)
     panel, feature_cols = build_learning_panel(
         factors,
         prices,

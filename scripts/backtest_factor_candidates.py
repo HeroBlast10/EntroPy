@@ -39,6 +39,10 @@ def main() -> None:
         n_quantiles=5,
         max_stock_weight=0.05,
         max_sector_weight=0.30,
+        # The cached GICS map comes from today's S&P 500 constituents, so names
+        # since removed from the index have no sector. Bucket them instead of
+        # aborting; the choice is recorded in the run metadata.
+        missing_sector_policy="unknown_bucket",
     )
     cost_model = CostModel(
         slippage_bps=5.0,
@@ -117,6 +121,46 @@ def main() -> None:
     summary = summary.sort_values("net_sharpe", ascending=False)
     summary.to_csv(summary_path)
     print("\n", summary.to_string(), flush=True)
+
+    # Provenance: record the exact code and inputs behind these numbers so a
+    # reviewer can tell whether artifacts were rebuilt from the same commit.
+    from dataclasses import asdict, is_dataclass
+
+    from quant_platform.core.utils.io import resolve_data_path
+    from quant_platform.core.utils.provenance import write_run_metadata
+
+    def _describe(obj: object) -> dict:
+        if is_dataclass(obj):
+            try:
+                return asdict(obj)
+            except TypeError:
+                pass
+        return dict(getattr(obj, "__dict__", {})) or {"repr": repr(obj)}
+
+    write_run_metadata(
+        output_root / "run_metadata.json",
+        stage="backtest_factor_candidates",
+        inputs={
+            "factors": resolve_data_path("factors", "factors.parquet"),
+            "prices": resolve_data_path("prices", "prices.parquet"),
+            "universe": resolve_data_path("universe", "universe.parquet"),
+        },
+        params={
+            "candidates": candidates,
+            "portfolio_config": _describe(config),
+            "cost_model": _describe(cost_model),
+            "initial_capital": 1_000_000.0,
+        },
+        extra={"summary_path": str(summary_path)},
+    )
+    write_run_metadata(
+        ROOT / "data" / "backtest" / "run_metadata.json",
+        stage="backtest_factor_candidates",
+        inputs={"factors": resolve_data_path("factors", "factors.parquet")},
+        params={"candidates": candidates},
+        extra={"note": "copied from the per-factor run; see the experiment dir"},
+    )
+    print(f"\nWrote run metadata to {output_root / 'run_metadata.json'}", flush=True)
 
 
 if __name__ == "__main__":

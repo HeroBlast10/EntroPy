@@ -51,6 +51,14 @@ class PortfolioConfig:
     max_sector_weight: float = 0.30         # 30 % per sector
     max_turnover: Optional[float] = None    # max single-period turnover (None = unconstrained)
 
+    # What to do when a name has no entry in sector_map while the sector cap
+    # is active. "fail" (default) keeps production behaviour fail-closed: an
+    # incomplete map is an error, never a silently concentrated book.
+    # "unknown_bucket" instead groups such names into one "Unknown" sector so
+    # the cap still applies; opt in explicitly for research runs and record
+    # the choice in the run metadata.
+    missing_sector_policy: str = "fail"
+
     # --- Selection ---
     n_quantiles: int = 5                    # for quantile-based methods
     long_quantile: int = 5                  # top quantile (buy)

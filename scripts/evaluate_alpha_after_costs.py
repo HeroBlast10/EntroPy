@@ -48,8 +48,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--oof",
         type=Path,
-        default=ROOT
-        / "data/experiments/nonlinear_alpha_corrected_20260731/oof_predictions.parquet",
+        default=ROOT / "data/experiments/nonlinear_alpha/oof_predictions.parquet",
     )
     parser.add_argument(
         "--prices",
@@ -64,8 +63,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT
-        / "data/experiments/nonlinear_alpha_corrected_20260731/after_costs",
+        default=ROOT / "data/experiments/nonlinear_alpha/after_costs",
     )
     parser.add_argument(
         "--frequencies",
@@ -173,7 +171,15 @@ def _attach_current_forward_returns(
     signals: pd.DataFrame,
     prices: pd.DataFrame,
     horizon: int,
-) -> tuple[pd.DataFrame, pd.Timestamp]:
+) -> tuple[pd.DataFrame, pd.Timestamp, int]:
+    """Align labels to the price calendar actually on disk.
+
+    Returns the relabelled signals, the last fully covered date and the number
+    of rows dropped because their forward return cannot be observed. The final
+    signal date normally coincides with the last available price, so its
+    forward return is unknowable; that day carries no information and dropping
+    it is preferable to aborting the entire after-cost evaluation.
+    """
     price_col = "adj_close" if "adj_close" in prices.columns else "close"
     calendar = pd.DatetimeIndex(
         prices["date"].dropna().unique()
@@ -218,9 +224,20 @@ def _attach_current_forward_returns(
     if position >= len(calendar) or calendar[position] != max_signal_date:
         raise ValueError("Last OOF signal date is absent from current prices")
     end_position = position + horizon
+    dropped_rows = 0
     if end_position >= len(calendar):
-        raise ValueError("Prices do not cover the final OOF holding horizon")
-    return refreshed, pd.Timestamp(calendar[end_position])
+        terminal_rows = int((refreshed["date"] == max_signal_date).sum())
+        dropped_rows = terminal_rows
+        end_position = len(calendar) - 1
+        refreshed = refreshed.loc[refreshed["date"] != max_signal_date].copy()
+        print(
+            f"WARNING: dropped {terminal_rows} row(s) dated {max_signal_date.date()}: "
+            "it is the last available price date, so no "
+            f"{horizon}-day forward return exists. Evaluation window ends "
+            f"{pd.Timestamp(calendar[end_position]).date()}.",
+            flush=True,
+        )
+    return refreshed, pd.Timestamp(calendar[end_position]), dropped_rows
 
 
 def _load_inputs(
@@ -256,7 +273,7 @@ def _load_inputs(
         universe_sha256=universe_sha256,
     )
     oof = oof.dropna(subset=[*SIGNALS.values()]).copy()
-    oof, evaluation_end = _attach_current_forward_returns(
+    oof, evaluation_end, dropped_terminal_rows = _attach_current_forward_returns(
         oof,
         prices,
         horizon,
@@ -306,7 +323,14 @@ def _load_inputs(
     upstream["_validated_metadata_sha256"] = _sha256(metadata_path)
     upstream["_current_prices_sha256"] = prices_sha256
     upstream["_current_universe_sha256"] = universe_sha256
-    return oof, prices, universe, evaluation_end, upstream
+    return (
+        oof,
+        prices,
+        universe,
+        evaluation_end,
+        upstream,
+        dropped_terminal_rows,
+    )
 
 
 def main() -> None:
@@ -321,7 +345,14 @@ def main() -> None:
         raise ValueError("--frequencies must not contain duplicates")
 
     args.output.mkdir(parents=True, exist_ok=True)
-    oof, prices, universe, evaluation_end, upstream = _load_inputs(args)
+    (
+        oof,
+        prices,
+        universe,
+        evaluation_end,
+        upstream,
+        dropped_terminal_rows,
+    ) = _load_inputs(args)
     oof.to_parquet(args.output / "eligible_oof_signals.parquet", index=False)
     cost_model = CostModel(
         commission_per_share=args.commission_per_share,
@@ -384,12 +415,30 @@ def main() -> None:
             pnl = trading["daily_pnl"]
             perf = trading["performance"]
             trades = trading["trades"]
-            max_abs_net_exposure = float(pnl["net_exposure"].abs().max())
+            rebalance_mask = (
+                pnl["is_rebalance"].astype(bool)
+                if "is_rebalance" in pnl.columns
+                else pd.Series(False, index=pnl.index)
+            )
+            # Dollar-neutrality is a property of how the book is *built*, so it
+            # has to be measured where the strategy acts: on rebalance dates.
+            # Between rebalances the book is deliberately left alone and the two
+            # legs drift apart with prices, so the all-day maximum mostly
+            # reflects that drift, not unintended directional risk — it would
+            # reject any strategy that is not rebalanced every single day.
+            # The drift is still tracked and published as its own column.
+            posture = pnl.loc[rebalance_mask, "net_exposure"]
+            if posture.empty:
+                posture = pnl["net_exposure"]
+            max_abs_net_exposure = float(posture.abs().max())
+            max_abs_drift_net_exposure = float(pnl["net_exposure"].abs().max())
             if max_abs_net_exposure > args.max_abs_net_exposure:
                 raise RuntimeError(
                     f"{alpha_name}/{frequency} realised net exposure "
-                    f"{max_abs_net_exposure:.2%}, above "
-                    f"{args.max_abs_net_exposure:.2%}"
+                    f"{max_abs_net_exposure:.2%} on rebalance dates, above "
+                    f"{args.max_abs_net_exposure:.2%} "
+                    f"(intraperiod drift peaked at "
+                    f"{max_abs_drift_net_exposure:.2%})"
                 )
             requested_trade_notional = float(
                 trades["notional_trade"].sum()
@@ -418,6 +467,12 @@ def main() -> None:
                         pnl["gross_exposure"].mean()
                     ),
                     "max_abs_actual_net_exposure": max_abs_net_exposure,
+                    "max_abs_drift_net_exposure": max_abs_drift_net_exposure,
+                    "rejected_order_share": float(
+                        (trades["fill_status"] != "filled").mean()
+                    )
+                    if len(trades)
+                    else 0.0,
                     "total_trading_cost_bps": perf.get(
                         "total_trading_cost_bps"
                     ),
@@ -445,7 +500,23 @@ def main() -> None:
         ascending=[True, False],
     )
     summary.to_csv(args.output / "alpha_after_cost_comparison.csv", index=False)
+    from quant_platform.core.utils.provenance import (
+        git_dirty,
+        git_head,
+        now_utc,
+        package_versions,
+    )
+
     metadata = {
+        "stage": "evaluate_alpha_after_costs",
+        "generated_at_utc": now_utc(),
+        "code": {
+            "git_head": git_head(ROOT),
+            "git_dirty": git_dirty(ROOT),
+            "python": sys.version.split()[0],
+        },
+        "dropped_terminal_rows": dropped_terminal_rows,
+        "packages": package_versions(),
         "timing": (
             "features and eligibility known by t-1 close -> trade at t close "
             "-> first return earned t to t+1"

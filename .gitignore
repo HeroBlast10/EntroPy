@@ -65,3 +65,6 @@ local_docs/
 
 # Local agent / IDE workspace state (private working notes, never public)
 .workbuddy/
+
+# Snapshot taken before a full artifact rebuild (local comparison copies only)
+data/_backup_*/

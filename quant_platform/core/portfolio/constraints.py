@@ -18,6 +18,13 @@ from loguru import logger
 
 from quant_platform.core.portfolio.construction import PortfolioConfig, PortfolioMode
 
+# A few tickers (typically names since removed from the index) may be missing
+# from the GICS source. They are grouped into one bucket so the sector cap
+# still applies; above this share the map is treated as broken and the run
+# fails loudly rather than silently concentrating risk.
+UNKNOWN_SECTOR = "Unknown"
+MAX_UNKNOWN_SECTOR_SHARE = 0.20
+
 
 # ===================================================================
 # Individual constraint functions
@@ -259,9 +266,26 @@ def _project_weights(
         missing_sector = sectors[sectors.isna()].index.tolist()
         if missing_sector:
             preview = ", ".join(map(str, missing_sector[:5]))
-            raise ValueError(
-                "Missing sector mapping while max_sector_weight is enabled: "
-                f"{preview}"
+            if getattr(config, "missing_sector_policy", "fail") != "unknown_bucket":
+                # Default: fail closed. An incomplete map is an error, never a
+                # silently concentrated portfolio.
+                raise ValueError(
+                    "Missing sector mapping while max_sector_weight is enabled: "
+                    f"{preview}"
+                )
+            unknown_share = len(missing_sector) / max(len(sectors), 1)
+            if unknown_share > MAX_UNKNOWN_SECTOR_SHARE:
+                raise ValueError(
+                    "Too many tickers lack a sector mapping while "
+                    f"max_sector_weight is enabled: {len(missing_sector)} of "
+                    f"{len(sectors)} ({unknown_share:.1%}), e.g. {preview}"
+                )
+            sectors = sectors.fillna(UNKNOWN_SECTOR)
+            logger.warning(
+                "{} ticker(s) have no GICS sector; grouped as '{}' under the "
+                "{:.0%} sector cap: {}",
+                len(missing_sector), UNKNOWN_SECTOR,
+                config.max_sector_weight, preview,
             )
         for sector in sectors.unique():
             mask = sectors.eq(sector).to_numpy()
@@ -372,7 +396,12 @@ def _verify_projected_weights(
             .set_index("ticker")["sector"]
         )
         grouped = weights.to_frame("weight").join(sector)
-        if grouped["sector"].isna().any():
+        # Mirrors the projection above: an incomplete map either already failed
+        # there, or was bucketed as Unknown — re-raising here would contradict
+        # the projection instead of catching a real violation.
+        if getattr(config, "missing_sector_policy", "fail") == "unknown_bucket":
+            grouped["sector"] = grouped["sector"].fillna(UNKNOWN_SECTOR)
+        elif grouped["sector"].isna().any():
             raise ValueError(
                 "Projected portfolio contains tickers without a sector mapping"
             )

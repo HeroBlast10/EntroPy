@@ -18,6 +18,7 @@ from loguru import logger
 import numpy as np
 
 from quant_platform.core.data.calendar import trading_dates
+from quant_platform.core.portfolio.constraints import UNKNOWN_SECTOR
 
 
 def rebalance_dates(
@@ -289,10 +290,12 @@ def validate_portfolio_weights(
                     .set_index("ticker")["sector"]
                 )
                 mapped = group.set_index("ticker")[["weight"]].join(sector)
-                if mapped["sector"].isna().any():
-                    raise ValueError(
-                        f"Missing sector mapping on {date}"
-                    )
+                # Same policy as projection/validation: the library default
+                # fails closed, research runs may opt into bucketing.
+                if getattr(config, "missing_sector_policy", "fail") == "unknown_bucket":
+                    mapped["sector"] = mapped["sector"].fillna(UNKNOWN_SECTOR)
+                elif mapped["sector"].isna().any():
+                    raise ValueError(f"Missing sector mapping on {date}")
                 gross = (
                     mapped.groupby("sector")["weight"]
                     .apply(lambda x: x.abs().sum())

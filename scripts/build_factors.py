@@ -103,6 +103,34 @@ def main(factors, evaluate, list_factors, periods, use_cache, strict_quality):
     reg.last_quality_report.to_csv(quality_path, index=False)
     click.echo(f"Factor quality report saved → {quality_path}")
 
+    from quant_platform.core.utils.io import resolve_data_path
+    from quant_platform.core.utils.provenance import write_run_metadata
+
+    meta_path = out_path.with_name("run_metadata.json")
+    write_run_metadata(
+        meta_path,
+        stage="build_factors",
+        inputs={
+            "prices": resolve_data_path("prices", "prices.parquet"),
+            "universe": resolve_data_path("universe", "universe.parquet"),
+            "fundamentals": resolve_data_path("fundamentals", "fundamentals.parquet"),
+        },
+        params={
+            "factor_names": list(factor_names) if factor_names else "ALL",
+            "periods": list(periods),
+            "use_cache": use_cache,
+            "strict_quality": strict_quality,
+            "evaluate": evaluate,
+        },
+        extra={
+            "outputs": {
+                "factors": str(out_path),
+                "quality_report": str(quality_path),
+            }
+        },
+    )
+    click.echo(f"Run metadata saved → {meta_path}")
+
     # --- Evaluate ---
     if evaluate:
         from quant_platform.core.signals.cross_sectional.evaluation import (

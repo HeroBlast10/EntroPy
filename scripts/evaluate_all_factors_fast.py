@@ -247,6 +247,26 @@ def main() -> None:
     print(f"\nSaved: {out_path}")
     print(f"Saved: {typed_path}")
 
+    from quant_platform.core.utils.provenance import write_run_metadata
+
+    meta_path = resolve_data_path("factors", "factor_evaluation_run_metadata.json")
+    write_run_metadata(
+        meta_path,
+        stage="evaluate_all_factors_fast",
+        inputs={
+            "factors": factor_path,
+            "prices": price_path,
+            "universe": resolve_data_path("universe", "universe.parquet"),
+        },
+        extra={
+            "outputs": {
+                "factor_evaluation": str(out_path),
+                "typed_evaluation": str(typed_path),
+            }
+        },
+    )
+    print(f"Saved: {meta_path}")
+
 
 if __name__ == "__main__":
     main()
