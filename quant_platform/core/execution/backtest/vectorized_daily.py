@@ -44,6 +44,8 @@ _TRADE_COLUMNS = [
     "executed_delta_weight",
     "fill_ratio",
     "fill_status",
+    "requested_participation",
+    "executed_participation",
 ]
 
 _COST_COLUMNS = [
@@ -63,6 +65,7 @@ _INCOMPLETE_FILL_STATUSES = {
     "rejected_missing_price",
     "rejected_no_liquidity",
     "rejected_rounding",
+    "rejected_not_tradable",
 }
 
 
@@ -74,6 +77,8 @@ def generate_trades(
     vol_today: pd.Series,
     capital: float,
     max_participation_rate: Optional[float] = None,
+    tradable_today: Optional[pd.Series] = None,
+    min_adv_shares: float = 0.0,
 ) -> pd.DataFrame:
     """Convert target-minus-actual weights into executable orders.
 
@@ -146,7 +151,7 @@ def generate_trades(
     trades.loc[rounded_zero, "fill_status"] = "rejected_rounding"
 
     if max_participation_rate is not None:
-        valid_adv = trades["adv_shares"].gt(0) & trades["adv_shares"].notna()
+        valid_adv = trades["adv_shares"].gt(0) & trades["adv_shares"].ge(min_adv_shares) & trades["adv_shares"].notna()
         no_liquidity = valid_price & ~rounded_zero & ~valid_adv
         trades.loc[no_liquidity, "shares"] = 0.0
         trades.loc[no_liquidity, "fill_status"] = "rejected_no_liquidity"
@@ -163,6 +168,14 @@ def generate_trades(
             trades["shares"] < trades["requested_shares"]
         )
         trades.loc[partial, "fill_status"] = "partial"
+
+    if tradable_today is not None:
+        tradable = tradable_today.reindex(trades["ticker"]).fillna(False).to_numpy(dtype=bool)
+        trades.loc[~tradable, "shares"] = 0.0
+        trades.loc[~tradable, "fill_status"] = "rejected_not_tradable"
+    denom = trades["adv_shares"].where(trades["adv_shares"].gt(0))
+    trades["requested_participation"] = trades["requested_shares"] / denom
+    trades["executed_participation"] = trades["shares"] / denom
 
     trades["executed_notional"] = (
         trades["shares"] * trades["price"].fillna(0.0)
@@ -256,6 +269,8 @@ def _generate_residual_trades(
     vol_today: pd.Series,
     capital: float,
     max_participation_rate: Optional[float],
+    tradable_today: Optional[pd.Series] = None,
+    min_adv_shares: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Generate orders only for ticker-level residual instructions."""
     tickers = pending.index
@@ -285,6 +300,8 @@ def _generate_residual_trades(
         vol_today=vol_today,
         capital=capital,
         max_participation_rate=max_participation_rate,
+        tradable_today=tradable_today,
+        min_adv_shares=min_adv_shares,
     )
     return orders, active_pending
 
@@ -309,6 +326,11 @@ def simulate_execution(
     ``return_daily_ledger=True`` to also receive the authoritative daily PnL
     ledger.  The same ledger is stored in ``trades.attrs["daily_ledger"]`` for
     backward-compatible callers.
+
+    ADV uses positive volumes from tradable rows only, shifted one day, with
+    at least max(5, adv_lookback//2) observations. Lookbacks shorter than five
+    use a five-day window. With participation enforcement enabled, orders
+    also require ADV >= cost_model.min_adv_shares.
     """
     if cost_model is None:
         cost_model = CostModel()
@@ -336,11 +358,15 @@ def simulate_execution(
         raise ValueError("prices must have at most one row per date/ticker")
 
     px = px.sort_values(["ticker", "date"]).copy()
-    px["stock_ret"] = px.groupby("ticker", sort=False)["adj_close"].pct_change()
+    px["stock_ret"] = px.groupby("ticker", sort=False)["adj_close"].pct_change(fill_method=None)
+    tradable = px["is_tradable"].fillna(False).astype(bool) if "is_tradable" in px else pd.Series(True, index=px.index)
+    px["is_tradable"] = tradable
     if "volume" in px:
         volume = pd.to_numeric(px["volume"], errors="coerce")
+        volume = volume.where(tradable & volume.gt(0) & np.isfinite(volume))
+        min_periods = max(5, adv_lookback // 2)
         px["adv_shares"] = volume.groupby(px["ticker"], sort=False).transform(
-            lambda s: s.rolling(adv_lookback, min_periods=1).mean().shift(1)
+            lambda s: s.rolling(max(adv_lookback, min_periods), min_periods=min_periods).mean().shift(1)
         )
     else:
         px["adv_shares"] = np.nan
@@ -405,11 +431,13 @@ def simulate_execution(
             price_series = pd.to_numeric(px_today[price_column], errors="coerce")
             adv_series = pd.to_numeric(px_today["adv_shares"], errors="coerce")
             vol_series = pd.to_numeric(px_today["daily_vol"], errors="coerce")
+            tradable_series = px_today["is_tradable"]
         else:
             pnl_dollar = 0.0
             price_series = pd.Series(dtype=float)
             adv_series = pd.Series(dtype=float)
             vol_series = pd.Series(dtype=float)
+            tradable_series = pd.Series(dtype=bool)
 
         gross_ret = pnl_dollar / prev_nav if prev_nav else 0.0
         nav_before_borrow = prev_nav + pnl_dollar
@@ -436,6 +464,8 @@ def simulate_execution(
                     vol_today=vol_series,
                     capital=capital_before_trade,
                     max_participation_rate=cost_model.max_participation_rate,
+                    tradable_today=tradable_series,
+                    min_adv_shares=cost_model.min_adv_shares,
                 )
                 prior_pending = None
             else:
@@ -447,6 +477,8 @@ def simulate_execution(
                     vol_today=vol_series,
                     capital=capital_before_trade,
                     max_participation_rate=cost_model.max_participation_rate,
+                    tradable_today=tradable_series,
+                    min_adv_shares=cost_model.min_adv_shares,
                 )
             if not orders.empty:
                 orders = _attach_costs(orders, cost_model)

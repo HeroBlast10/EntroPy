@@ -77,6 +77,7 @@ class CostModel:
 
     # --- ADV lookback for participation rate ---
     adv_lookback: int = 20                  # trading days for average daily volume
+    min_adv_shares: float = 1_000.0         # reject fills below this historical ADV
     max_participation_rate: Optional[float] = 0.10
 
     def __post_init__(self) -> None:
@@ -90,6 +91,7 @@ class CostModel:
             "finra_taf_per_share",
             "stamp_duty_pct",
             "borrow_rate_annual",
+            "min_adv_shares",
         )
         for name in nonnegative:
             value = float(getattr(self, name))

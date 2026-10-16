@@ -34,7 +34,7 @@ The platform moves beyond "best-looking backtests" toward a production research 
 - **Hierarchical clustering** redundancy pruning (keeps 3-5 complementary factors).
 - Comparable multi-factor combiners with regime-aware weighting.
 - Factor-risk-model-based portfolio optimization.
-- **Production Readiness Score (PRS)** — 7-dimensional 0-100 score with ACCEPT/CONDITIONAL/REJECT verdict.
+- **Production Readiness Score (PRS)** — six core dimensions plus measured crowding when available, with catalog DSR and ACCEPT/CONDITIONAL/REJECT verdicts. Missing crowding is excluded and remaining weights are renormalized.
 - **Factor Discovery Tearsheet** — self-contained HTML per factor with all key charts.
 - **Multi-Factor Decision Story** — end-to-end narrative HTML report.
 - YAML-driven experiment orchestration for reproducible research.

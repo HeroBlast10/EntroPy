@@ -2,6 +2,36 @@
 
 All notable changes to EntroPy are documented in this file.
 
+## [Unreleased] — 2026-10-16
+
+- Optimisation converts ranked scores to daily expected returns using a
+  configurable annual cross-sectional spread (`--expected-alpha-annual`).
+  Failures raise `PortfolioOptimizationError`; explicit `--fallback-method
+  quantile` records the fallback and reason in portfolio/backtest metadata.
+- Structural risk uses Market, lagged log-cap SMB and K-1 sector excess
+  returns, without candidate alpha. Factor/specific variance and Euler
+  volatility contributions include additivity checks. Static sector maps do
+  not establish point-in-time historical classifications.
+- Incremental alpha selection uses the OLS intercept's Newey-West HAC
+  t-statistic (`min_incremental_alpha_tstat`). `incremental_sharpe` separately
+  reports annualised intercept/residual volatility for compatibility.
+- ADV excludes non-tradable/non-positive volume, requires at least
+  `max(5, lookback//2)` historical observations and defaults to a 1,000-share
+  liquidity floor. Backtests disable implicit price padding and reject
+  non-tradable orders.
+- Capacity distinguishes requested/executed participation. Both requested
+  p95 metrics use daily maxima on dates with positive whole-share requests;
+  zero-only rounding retries cannot dilute the percentile. Initial-capital
+  capacity removes NAV growth and includes an all-date limit. Scaled cost
+  curves reapply participation caps and suppress return estimates when fills
+  change, pending a full execution replay.
+- PRS excludes unmeasured crowding and renormalises weights. Catalog DSR is
+  connected to scoring and HTML reports, with per-observation Sharpe units,
+  trial dispersion and the independent-trial assumption disclosed. Missing
+  DSR earns no substitute points. Formula: [Bailey & López de Prado (2014)](https://www.davidhbailey.com/dhbpapers/deflated-sharpe.pdf).
+- Candidate backtests support `--output-dir`, preserve per-factor weights,
+  fills and analytics together, and use cached sector classifications.
+
 ## [0.8.4] — 2026-03-26
 
 ### Performance — Factor Computation Optimization (10-50× faster)

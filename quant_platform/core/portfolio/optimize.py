@@ -11,8 +11,9 @@ Solves the classic Markowitz problem with practical constraints:
 
 Uses ``scipy.optimize.minimize`` (SLSQP) so no external solver is needed.
 
-If the optimiser fails, falls back to the quantile baseline to ensure the
-pipeline never produces an empty portfolio.
+Alpha and covariance use daily return units. Estimation or solver failures
+raise PortfolioOptimizationError; only the calling pipeline may opt into a
+recorded fallback.
 """
 
 from __future__ import annotations
@@ -30,6 +31,10 @@ from quant_platform.core.portfolio.construction import (
 )
 
 
+class PortfolioOptimizationError(RuntimeError):
+    """Risk estimation or constrained portfolio optimisation failed."""
+
+
 class OptimizedPortfolio(PortfolioConstructor):
     """Mean-variance portfolio with linear/box constraints.
 
@@ -39,6 +44,10 @@ class OptimizedPortfolio(PortfolioConstructor):
     cov_lookback : trading days used to estimate the covariance matrix.
     shrinkage : Ledoit-Wolf shrinkage intensity ∈ [0, 1].
         0 = sample covariance, 1 = diagonal (single-factor) covariance.
+    expected_alpha_annual : assumed annual top-to-bottom cross-sectional
+        expected-return spread. Scores are converted to centred percentile
+        ranks and multiplied by this spread / 252. This is a configurable
+        prior, not a return forecast estimated from the backtest.
     """
 
     def __init__(
@@ -51,6 +60,7 @@ class OptimizedPortfolio(PortfolioConstructor):
         factor_risk_halflife: int = 60,
         factor_risk_shrinkage: float = 0.5,
         turnover_penalty: float = 0.0,
+        expected_alpha_annual: float = 0.10,
     ) -> None:
         super().__init__(config)
         self.risk_aversion = risk_aversion
@@ -60,6 +70,22 @@ class OptimizedPortfolio(PortfolioConstructor):
         self.factor_risk_halflife = factor_risk_halflife
         self.factor_risk_shrinkage = factor_risk_shrinkage
         self.turnover_penalty = turnover_penalty
+        if not np.isfinite(expected_alpha_annual) or expected_alpha_annual <= 0:
+            raise ValueError("expected_alpha_annual must be finite and positive")
+        if not np.isfinite(risk_aversion) or risk_aversion < 0:
+            raise ValueError("risk_aversion must be finite and non-negative")
+        self.expected_alpha_annual = expected_alpha_annual
+        self.sector_map = None
+        self.risk_factor_names_ = []
+
+    def build(self, signal, universe, rebalance_dates, sector_map=None):
+        self.sector_map = sector_map
+        return super().build(signal, universe, rebalance_dates, sector_map=sector_map)
+
+    def _daily_expected_returns(self, scores: np.ndarray) -> np.ndarray:
+        """Map scores to a daily return prior with the configured full spread."""
+        ranks = pd.Series(scores).rank(method="average").to_numpy()
+        return (ranks - (len(ranks) + 1) / 2) / max(len(ranks) - 1, 1) * self.expected_alpha_annual / 252.0
 
     # ------------------------------------------------------------------
     # Core
@@ -89,22 +115,18 @@ class OptimizedPortfolio(PortfolioConstructor):
             return pd.Series(dtype=float)
 
         tickers = sig_today["ticker"].values
-        alpha = sig_today.set_index("ticker")[sig_col].values.astype(float)
+        alpha = self._daily_expected_returns(sig_today[sig_col].to_numpy(dtype=float))
 
         # --- Estimate covariance from historical returns ---
-        cov = self._estimate_covariance(signal, tickers, date, sig_col=sig_col)
-        if cov is None:
-            logger.warning("Covariance estimation failed on {} — using equal weight fallback", date.date())
-            return self._fallback_weights(alpha, tickers)
-
-        # --- Solve ---
         try:
-            w = self._solve_qp(alpha, cov, tickers, prev_weights)
+            cov = self._estimate_covariance(signal, tickers, date, sig_col=sig_col)
+            if cov is None:
+                raise PortfolioOptimizationError(f"Insufficient covariance history on {date.date()}")
+            return self._solve_qp(alpha, cov, tickers, prev_weights)
+        except PortfolioOptimizationError:
+            raise
         except Exception as exc:
-            logger.warning("Optimisation failed on {} ({}), using equal weight fallback", date.date(), exc)
-            w = self._fallback_weights(alpha, tickers)
-
-        return w
+            raise PortfolioOptimizationError(f"Optimisation failed on {date.date()}: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Covariance estimation
@@ -128,20 +150,20 @@ class OptimizedPortfolio(PortfolioConstructor):
 
         hist = signal.loc[signal["date"] < date].copy()
         hist = hist[hist["ticker"].isin(tickers)]
+        if "is_tradable" in hist:
+            hist.loc[~hist["is_tradable"].fillna(False).astype(bool), "adj_close"] = np.nan
 
         # Pivot to wide returns
         pivot = hist.pivot(index="date", columns="ticker", values="adj_close")
-        pivot = pivot[list(tickers)]  # ensure column order
+        pivot = pivot.reindex(columns=tickers)  # ensure column order
         pivot = pivot.sort_index().tail(self.cov_lookback)
-        ret = pivot.pct_change().dropna()
+        ret = pivot.pct_change(fill_method=None).dropna()
 
         if len(ret) < 30 or ret.shape[1] < 2:
             return None
 
         if self.use_factor_risk:
-            factor_cov = self._estimate_factor_risk_covariance(hist, ret, tickers, sig_col)
-            if factor_cov is not None:
-                return factor_cov
+            return self._estimate_factor_risk_covariance(hist, ret, tickers, sig_col)
 
         # Sample covariance
         S = ret.cov().values
@@ -172,35 +194,34 @@ class OptimizedPortfolio(PortfolioConstructor):
 
         The optimizer consumes a stock-level covariance matrix, so this method
         fits ``FactorRiskModel`` on recent stock returns and reconstructs
-        ``B F B' + diag(specific_var)``.  If the risk model cannot be estimated,
-        callers fall back to the original shrunk stock covariance.
+        ``B F B' + diag(specific_var)``. Missing model inputs or incomplete
+        estimates are errors, never an implicit switch to another risk model.
         """
-        try:
-            from quant_platform.core.portfolio.risk_model import FactorRiskModel
-        except Exception:
-            return None
+        from quant_platform.core.portfolio.risk_model import FactorRiskModel
 
-        factor_returns = pd.DataFrame(index=stock_returns.index)
-        factor_returns["market"] = stock_returns.mean(axis=1)
-
-        alpha_spread = self._historical_alpha_spread_returns(hist, stock_returns, tickers, sig_col)
-        if alpha_spread is not None and alpha_spread.notna().sum() >= 20:
-            factor_returns["alpha_spread"] = alpha_spread.reindex(factor_returns.index)
-
-        factor_returns = factor_returns.replace([np.inf, -np.inf], np.nan).dropna(how="all")
-        factor_returns = factor_returns.fillna(0.0)
-        if len(factor_returns) < 30 or factor_returns.shape[1] == 0:
-            return None
+        if "market_cap" not in hist or self.sector_map is None or self.sector_map.empty:
+            raise PortfolioOptimizationError(
+                "Structural factor risk requires historical market_cap and sector_map; "
+                "supply them or explicitly set use_factor_risk=False"
+            )
+        caps = hist.pivot(index="date", columns="ticker", values="market_cap")
+        factor_returns = FactorRiskModel.build_structural_factors(stock_returns, caps)
 
         model = FactorRiskModel(
             halflife=self.factor_risk_halflife,
             shrinkage=self.factor_risk_shrinkage,
         )
-        model.fit(stock_returns, factor_returns)
+        sector_map = self.sector_map
+        if self.config.missing_sector_policy == "unknown_bucket":
+            sector_map = sector_map.set_index("ticker").reindex(tickers).fillna({"sector": "Unknown"}).reset_index(names="ticker")
+        model.fit(stock_returns, factor_returns, sector_map=sector_map)
+        self.risk_factor_names_ = model.factor_names_
         if model.exposures_ is None or model.exposures_.empty or model.cov_matrix_ is None:
             return None
 
-        exposures = model.exposures_.reindex(tickers).fillna(0.0)
+        exposures = model.exposures_.reindex(tickers)
+        if exposures.isna().any().any() or model.specific_risk_.reindex(tickers).isna().any():
+            raise PortfolioOptimizationError("Incomplete structural factor risk estimates")
         if exposures.empty:
             return None
 
@@ -208,8 +229,8 @@ class OptimizedPortfolio(PortfolioConstructor):
         # FactorRiskModel exposes annualized risk; this optimizer otherwise
         # uses daily stock covariance, so convert both components to daily.
         factor_cov = model.cov_matrix_ / 252.0
-        spec = model.specific_risk_.reindex(tickers).fillna(model.specific_risk_.median())
-        spec_daily_var = (spec.fillna(0.0).to_numpy(dtype=float) / np.sqrt(252.0)) ** 2
+        spec = model.specific_risk_.reindex(tickers)
+        spec_daily_var = (spec.to_numpy(dtype=float) / np.sqrt(252.0)) ** 2
 
         cov = b @ factor_cov @ b.T + np.diag(spec_daily_var)
         eigvals = np.linalg.eigvalsh(cov)
@@ -217,37 +238,6 @@ class OptimizedPortfolio(PortfolioConstructor):
             cov += (-eigvals.min() + 1e-8) * np.eye(cov.shape[0])
         logger.debug("Using factor risk covariance with {} factors", len(model.factor_names_ or []))
         return cov
-
-    @staticmethod
-    def _historical_alpha_spread_returns(
-        hist: pd.DataFrame,
-        stock_returns: pd.DataFrame,
-        tickers: np.ndarray,
-        sig_col: Optional[str],
-    ) -> Optional[pd.Series]:
-        if not sig_col or sig_col not in hist.columns:
-            return None
-        scores = hist.pivot(index="date", columns="ticker", values=sig_col)
-        scores = scores.reindex(index=stock_returns.index, columns=tickers).shift(1)
-        spreads = {}
-        for dt, ret_row in stock_returns.iterrows():
-            score = scores.loc[dt].dropna()
-            if len(score) < 10:
-                continue
-            common = score.index.intersection(ret_row.dropna().index)
-            if len(common) < 10:
-                continue
-            score = score.loc[common]
-            ret = ret_row.loc[common]
-            long_cut = score.quantile(0.8)
-            short_cut = score.quantile(0.2)
-            longs = ret[score >= long_cut]
-            shorts = ret[score <= short_cut]
-            if len(longs) and len(shorts):
-                spreads[dt] = longs.mean() - shorts.mean()
-        if not spreads:
-            return None
-        return pd.Series(spreads, name="alpha_spread")
 
     # ------------------------------------------------------------------
     # QP solver
@@ -260,7 +250,11 @@ class OptimizedPortfolio(PortfolioConstructor):
         tickers: np.ndarray,
         prev_weights: Optional[pd.Series],
     ) -> pd.Series:
-        """Solve the mean-variance QP with constraints via SLSQP."""
+        """Solve with alpha in expected daily returns and cov in daily variance.
+
+        Increasing lambda reduces optimal variance for a fixed convex feasible
+        set; maximum single-name weight need not be monotone for general cov.
+        """
         from scipy.optimize import minimize
 
         cfg = self.config
@@ -335,7 +329,7 @@ class OptimizedPortfolio(PortfolioConstructor):
         )
 
         if not result.success:
-            raise RuntimeError(f"SLSQP did not converge: {result.message}")
+            raise PortfolioOptimizationError(f"SLSQP did not converge: {result.message}")
 
         w_opt = result.x
 
@@ -343,29 +337,6 @@ class OptimizedPortfolio(PortfolioConstructor):
         w_opt[np.abs(w_opt) < 1e-6] = 0.0
 
         return pd.Series(w_opt, index=tickers)
-
-    def _fallback_weights(
-        self,
-        alpha: np.ndarray,
-        tickers: np.ndarray,
-    ) -> pd.Series:
-        """Return a mode-consistent fallback when risk estimation fails."""
-        n = len(tickers)
-        if n == 0:
-            return pd.Series(dtype=float)
-        if self.config.mode == PortfolioMode.LONG_ONLY:
-            return pd.Series(1.0 / n, index=tickers)
-
-        n_side = n // 2
-        if n_side == 0:
-            return pd.Series(dtype=float)
-        order = np.argsort(alpha)
-        short_idx = order[:n_side]
-        long_idx = order[-n_side:]
-        values = np.zeros(n, dtype=float)
-        values[long_idx] = 1.0 / n_side
-        values[short_idx] = -1.0 / n_side
-        return pd.Series(values, index=tickers)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -375,6 +346,6 @@ class OptimizedPortfolio(PortfolioConstructor):
     def _detect_signal_col(signal: pd.DataFrame) -> str:
         for c in signal.columns:
             if c not in ("date", "ticker", "adj_close", "close", "volume",
-                         "market_cap", "sector"):
+                         "market_cap", "sector", "is_tradable"):
                 return c
         raise ValueError("Signal DataFrame has no factor column")

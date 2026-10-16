@@ -25,7 +25,7 @@ from quant_platform.core.alpha_models.multi_factor import (
 )
 from quant_platform.core.portfolio.construction import PortfolioConfig, PortfolioConstructor, PortfolioMode
 from quant_platform.core.portfolio.quantile import QuantilePortfolio
-from quant_platform.core.portfolio.optimize import OptimizedPortfolio
+from quant_platform.core.portfolio.optimize import OptimizedPortfolio, PortfolioOptimizationError
 from quant_platform.core.portfolio.rebalance import carry_forward_weights, rebalance_dates, validate_portfolio_weights
 from quant_platform.core.signals.cross_sectional.evaluation import add_forward_returns
 from quant_platform.core.signals.effective import build_effective_signal
@@ -54,6 +54,7 @@ def run_portfolio_pipeline(
     neutralize_by: Optional[Iterable[str]] = None,
     return_col: str = "fwd_ret_1d",
     evaluation_end: Optional[pd.Timestamp | str] = None,
+    fallback_method: Optional[str] = None,
     **constructor_kwargs,
 ) -> Dict[str, object]:
     """End-to-end portfolio construction pipeline.
@@ -70,6 +71,9 @@ def run_portfolio_pipeline(
     evaluation_end : optional final holding date.  It may extend past the
         last signal date (for example by the forward-return horizon), but
         cannot exceed available prices.
+    fallback_method : None (fail on optimisation error) or "quantile".
+        The latter reruns the complete construction with quantile weights,
+        recording fallback=true and its reason in both metadata files.
     **constructor_kwargs : extra kwargs passed to the constructor
         (e.g. ``risk_aversion=2.0`` for the optimised method).
 
@@ -82,6 +86,8 @@ def run_portfolio_pipeline(
         - ``output_path`` — saved Parquet path
     """
     cfg_yaml = load_config()
+    if fallback_method not in (None, "quantile"):
+        raise ValueError("fallback_method must be None or 'quantile'")
     if config is None:
         config = PortfolioConfig()
 
@@ -169,7 +175,10 @@ def run_portfolio_pipeline(
     if needs_price_context:
         px_cols = ["date", "ticker", "adj_close"]
         if all(c in prices.columns for c in px_cols):
+            px_cols += [c for c in ("market_cap", "is_tradable") if c in prices]
             signal = signal.merge(prices[px_cols], on=["date", "ticker"], how="left")
+        if "market_cap" not in signal and "market_cap" in factors:
+            signal = signal.merge(factors[["date", "ticker", "market_cap"]], on=["date", "ticker"], how="left")
 
     # Universe
     if universe_override is not None:
@@ -184,7 +193,10 @@ def run_portfolio_pipeline(
         universe = prices[["date", "ticker"]].drop_duplicates()
         universe["pass_all_filters"] = True
 
-    if sector_map is None and config.max_sector_weight is not None and config.max_sector_weight > 0:
+    if method == "optimize" and "market_cap" not in signal and "market_cap" in universe:
+        signal = signal.merge(universe[["date", "ticker", "market_cap"]], on=["date", "ticker"], how="left")
+
+    if sector_map is None and ((config.max_sector_weight is not None and config.max_sector_weight > 0) or (method == "optimize" and constructor_kwargs.get("use_factor_risk", True))):
         sector_map = ensure_sector_map(tickers=sorted(signal["ticker"].dropna().unique()))
         if sector_map is not None and not sector_map.empty:
             logger.info("Loaded sector map for {} tickers", sector_map["ticker"].nunique())
@@ -208,7 +220,17 @@ def run_portfolio_pipeline(
                 method, config.mode.value, config.weight_scheme.value, config.rebalance_freq)
 
     # --- Build weights ---
-    weights = constructor.build(signal, universe, reb_dates, sector_map=sector_map)
+    fallback = False
+    fallback_reason = None
+    try:
+        weights = constructor.build(signal, universe, reb_dates, sector_map=sector_map)
+    except PortfolioOptimizationError as exc:
+        if method != "optimize" or fallback_method is None:
+            raise
+        fallback = True
+        fallback_reason = str(exc)
+        logger.warning("Explicit {} fallback: {}", fallback_method, fallback_reason)
+        weights = QuantilePortfolio(config).build(signal, universe, reb_dates, sector_map=sector_map)
 
     if not weights.empty and not regime_controls.empty:
         weights = _apply_regime_net_exposure(weights, regime_controls)
@@ -274,6 +296,13 @@ def run_portfolio_pipeline(
         "factor_weights_path": str(factor_weights_path) if factor_weights_path else None,
         "regime_controls_path": str(regime_controls_path) if regime_controls_path else None,
         "method": method,
+        "effective_method": fallback_method if fallback else method,
+        "fallback": fallback,
+        "fallback_reason": fallback_reason,
+        "expected_alpha_annual": getattr(constructor, "expected_alpha_annual", None),
+        "alpha_units": "daily expected return" if method == "optimize" else None,
+        "covariance_units": "daily return covariance" if method == "optimize" else None,
+        "risk_factors": getattr(constructor, "risk_factor_names_", []),
         "mode": config.mode.value,
         "rebalance_freq": config.rebalance_freq,
         "evaluation_end": str(requested_evaluation_end.date()),
@@ -285,6 +314,7 @@ def run_portfolio_pipeline(
     # above is authoritative when output_path is custom.
     latest_meta_path = resolve_data_path("portfolio", "metadata.json")
     if latest_meta_path.resolve() != meta_path.resolve():
+        latest_meta_path.parent.mkdir(parents=True, exist_ok=True)
         latest_meta_path.write_text(
             json.dumps(meta, indent=2), encoding="utf-8"
         )

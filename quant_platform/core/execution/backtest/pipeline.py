@@ -200,6 +200,7 @@ def run_trading_pipeline(
         "risk_free_rate": risk_free_rate,
         "start_date": perf.get("start_date"),
         "end_date": perf.get("end_date"),
+        "fallback": False,
     }
     # Carry forward signal_col from portfolio metadata if available
     portfolio_meta_path = (
@@ -209,11 +210,14 @@ def run_trading_pipeline(
     )
     if not portfolio_meta_path.exists():
         portfolio_meta_path = resolve_data_path("portfolio", "metadata.json")
-    if portfolio_meta_path.exists():
+    if weights_override is None and portfolio_meta_path.exists():
         try:
             pmeta = json.loads(portfolio_meta_path.read_text(encoding="utf-8"))
             bt_meta["signal_col"] = pmeta.get("signal_col")
             bt_meta["portfolio_method"] = pmeta.get("method")
+            bt_meta["fallback"] = pmeta.get("fallback", False)
+            bt_meta["fallback_reason"] = pmeta.get("fallback_reason")
+            bt_meta["effective_portfolio_method"] = pmeta.get("effective_method", pmeta.get("method"))
         except Exception:
             pass
     bt_meta_path = output_dir / "backtest_metadata.json"

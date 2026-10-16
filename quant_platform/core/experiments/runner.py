@@ -115,6 +115,7 @@ class ExperimentRunner:
                 "enabled", "min_factors", "max_factors", "max_signal_corr",
                 "max_return_corr", "max_exposure_similarity",
                 "min_incremental_sharpe",
+                "min_incremental_alpha_tstat",
             },
             "backtest": {
                 "initial_capital", "benchmark_market", "benchmark_path",
@@ -127,7 +128,7 @@ class ExperimentRunner:
                 "transfer_fee_rate", "slippage_model", "slippage_k",
                 "min_commission", "commission_min", "sec_fee_rate",
                 "finra_taf_per_share", "finra_taf_max", "stamp_duty_pct",
-                "adv_lookback", "max_participation_rate",
+                "adv_lookback", "max_participation_rate", "min_adv_shares",
             },
             "evaluation": {
                 "walkforward", "ablation_scenarios", "cost_stress_bps",
@@ -651,6 +652,7 @@ class ExperimentRunner:
             min_factors=int(red_cfg.get("min_factors", 3)),
             max_factors=int(red_cfg.get("max_factors", 5)),
             min_incremental_sharpe=float(red_cfg.get("min_incremental_sharpe", 0.0)),
+            min_incremental_alpha_tstat=float(red_cfg.get("min_incremental_alpha_tstat", 0.0)),
         )
         report = build_redundancy_report(
             factors,
@@ -761,6 +763,7 @@ class ExperimentRunner:
             stamp_duty_pct=float(c.get("stamp_duty_pct", 0.0)),
             borrow_rate_annual=float(c.get("borrow_rate_annual", c.get("borrow_rate", 0.005))),
             adv_lookback=int(c.get("adv_lookback", 20)),
+            min_adv_shares=float(c.get("min_adv_shares", 1_000.0)),
             max_participation_rate=(
                 None if participation is None else float(participation)
             ),

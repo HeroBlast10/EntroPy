@@ -1,6 +1,6 @@
-"""Production Readiness Score (PRS) — 7-dimensional factor quality scorecard.
+"""Production Readiness Score (PRS) — evidence-aware factor quality scorecard.
 
-Each candidate factor is scored 0-100 across seven dimensions and receives
+Each candidate factor is scored 0-100 across six core dimensions and receives
 a single headline PRS number that tells a portfolio manager or allocator:
 
     "Is this factor ready to deploy in a real portfolio?"
@@ -13,7 +13,7 @@ Dimensions and weights
 | 2 | Temporal stability     | 20  | subperiod consistency, OOS IC, regime stability |
 | 3 | Economic significance  | 15  | cost-adj LS Sharpe, break-even cost             |
 | 4 | Capacity               | 15  | $-capacity at 10% ADV, participation rate       |
-| 5 | Crowding               | 10  | crowding score (low = good)                     |
+| 5 | Crowding (optional)    | 10  | explicitly supplied proxy only                 |
 | 6 | Cross-sectional width  | 10  | monotonicity, long-only compatible              |
 | 7 | Implementation cost    | 10  | turnover, alpha half-life vs rebalance frequency|
 
@@ -23,6 +23,11 @@ Score interpretation
 - 60-79: Conditional — requires further due diligence (cost / capacity concern).
 - 40-59: Watchlist — promising signal, needs more data or parameter refining.
 - <40:   Reject — insufficient evidence for live deployment.
+
+Without a measured crowding proxy, that dimension is excluded and remaining
+weights are renormalised. Missing DSR earns zero DSR points, never hit-rate
+points. Catalog scoring computes DSR from gross daily long-short returns;
+its independent-trial assumption and trial count are reported explicitly.
 
 Usage
 -----
@@ -102,8 +107,8 @@ def _score_significance(
     if np.isfinite(deflated_sharpe):
         dsr_pts = _clamp(deflated_sharpe * 20.0, 0, 20)
     else:
-        hit = _safe(rank_ic_stats, "hit_rate", 0.5)
-        dsr_pts = _clamp((hit - 0.5) / 0.10 * 20.0, 0, 20)
+        # Missing DSR is missing evidence; hit-rate is not a DSR substitute.
+        dsr_pts = 0.0
 
     total = t_pts + fdr_pts + dsr_pts
     return {
@@ -200,22 +205,17 @@ def _score_capacity(adv: Dict) -> Dict:
 def _score_crowding(adv: Dict, crowding_score: float = np.nan) -> Dict:
     """Dimension 5: Factor crowding risk (max 100, lower crowding = better).
 
-    If an explicit crowding proxy is supplied, use it directly.
-    Otherwise estimate from IC autocorrelation: high positive autocorrelation
-    implies the factor tends to persist — which is a mild crowding proxy.
+    Use an explicitly supplied proxy; otherwise report missing evidence.
     """
     if np.isfinite(crowding_score):
         score = _clamp((1.0 - crowding_score) * 100.0, 0, 100)
     else:
-        hit = _safe(adv, "hit_rate", 0.5)
-        skew = _safe(adv, "skew", 0.0)
-        ic_mean = _safe(adv, "mean_ic", 0.0)
-        # Very high IC mean + low skew could signal crowding; keep neutral at 60
-        score = 60.0 if not np.isfinite(ic_mean) else _clamp(70.0 - abs(skew) * 10.0, 30, 90)
+        return {"score": np.nan, "crowding_proxy": np.nan, "available": False}
 
     return {
         "score": score,
         "crowding_proxy": crowding_score,
+        "available": True,
     }
 
 
@@ -331,6 +331,8 @@ def score_factor_readiness(
         - ``weights``: dimension weights used
     """
     adv = advanced_metrics or {}
+    if not np.isfinite(deflated_sharpe):
+        deflated_sharpe = _safe(adv, "deflated_sharpe")
     ric_stats = rank_ic_stats or {}
     if not ric_stats and "ric_mean_ic" in adv:
         ric_stats = {
@@ -353,8 +355,15 @@ def score_factor_readiness(
         "width": _score_width(adv),
         "implementation": _score_implementation(adv),
     }
-
-    weighted = sum(dims[d]["score"] * DIMENSION_WEIGHTS[d] for d in dims)
+    # Without measured crowding evidence, remove that dimension and disclose
+    # the missing evidence. Renormalise the remaining weights to 100%.
+    excluded = []
+    if not dims["crowding"]["available"]:
+        del dims["crowding"]
+        excluded.append("crowding: no measured proxy supplied")
+    weight_sum = sum(DIMENSION_WEIGHTS[d] for d in dims)
+    weights = {d: DIMENSION_WEIGHTS[d] / weight_sum for d in dims}
+    weighted = sum(dims[d]["score"] * weights[d] for d in dims)
     total = round(_clamp(weighted, 0.0, 100.0), 1)
 
     # Hard gates — these directly cause a REJECT regardless of total score
@@ -379,8 +388,8 @@ def score_factor_readiness(
         breakdown_rows.append({
             "dimension": dim_name,
             "raw_score": round(dim_result["score"], 1),
-            "weight": DIMENSION_WEIGHTS[dim_name],
-            "weighted_score": round(dim_result["score"] * DIMENSION_WEIGHTS[dim_name], 2),
+            "weight": weights[dim_name],
+            "weighted_score": round(dim_result["score"] * weights[dim_name], 2),
         })
 
     return {
@@ -391,7 +400,8 @@ def score_factor_readiness(
         "gate_failures": gate_failures,
         "breakdown": dims,
         "breakdown_table": pd.DataFrame(breakdown_rows),
-        "weights": DIMENSION_WEIGHTS,
+        "weights": weights,
+        "excluded_dimensions": excluded,
     }
 
 
@@ -431,6 +441,7 @@ def score_factor_catalog(
     *,
     fdr_q_series: Optional[pd.Series] = None,
     crowding_scores: Optional[pd.Series] = None,
+    n_trials: Optional[int] = None,
 ) -> pd.DataFrame:
     """Score all factors in a tearsheet dict and return a ranked DataFrame.
 
@@ -442,6 +453,8 @@ def score_factor_catalog(
     comparison : optional pre-computed comparison table (carries FDR q-values).
     fdr_q_series : per-factor FDR q-values indexed by factor name.
     crowding_scores : per-factor crowding proxy (0-1).
+    n_trials : independent trials assumed for DSR. Defaults to catalog size;
+        supply the full search count when this catalog is a selected subset.
 
     Returns
     -------
@@ -450,6 +463,13 @@ def score_factor_catalog(
         economic, capacity, crowding, width, implementation.
     """
     rows = []
+    trials = n_trials if n_trials is not None else max(len(tearsheets), 1)
+    trial_sharpes = []
+    for ts in tearsheets.values():
+        ret = pd.Series(ts.get("long_short", pd.Series(dtype=float)), dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
+        if len(ret) >= 20 and ret.std() > 0:
+            trial_sharpes.append(float(ret.mean() / ret.std()))
+    variance = float(np.var(trial_sharpes, ddof=1)) if len(trial_sharpes) > 1 else None
     for fname, ts in tearsheets.items():
         adv = ts.get("advanced_metrics", {})
         ric_stats = ts.get("rank_ic_stats", {})
@@ -469,6 +489,7 @@ def score_factor_catalog(
             adv, ic_stats, ric_stats,
             fdr_q=fdr,
             crowding_score=cs,
+            deflated_sharpe=_tearsheet_dsr(ts, trials, variance),
             factor_name=fname,
         )
         row = {
@@ -476,13 +497,31 @@ def score_factor_catalog(
             "total": prs["total"],
             "verdict": prs["verdict"],
             "gate_failures": "; ".join(prs["gate_failures"]) if prs["gate_failures"] else "",
+            "deflated_sharpe": prs["breakdown"]["significance"]["deflated_sharpe"],
+            "dsr_n_trials": trials,
+            "dsr_assumption": "independent trials; gross daily long-short returns",
+            "excluded_dimensions": "; ".join(prs["excluded_dimensions"]),
         }
         for dim in DIMENSION_WEIGHTS:
-            row[dim] = round(prs["breakdown"][dim]["score"], 1)
+            row[dim] = round(prs["breakdown"][dim]["score"], 1) if dim in prs["breakdown"] else np.nan
         rows.append(row)
 
-    df = pd.DataFrame(rows).sort_values("total", ascending=False).reset_index(drop=True)
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df = df.sort_values("total", ascending=False).reset_index(drop=True)
     return df
+
+
+def _tearsheet_dsr(tearsheet: Dict, n_trials: int, sharpe_variance: Optional[float] = None) -> float:
+    from quant_platform.core.evaluation.overfit import deflated_sharpe_ratio
+
+    ret = pd.Series(tearsheet.get("long_short", pd.Series(dtype=float)), dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(ret) < 20 or ret.std() <= 0:
+        return np.nan
+    return deflated_sharpe_ratio(float(ret.mean() / ret.std()), n_trials, len(ret),
+                                 skew=float(ret.skew()), kurt=float(ret.kurt() + 3),
+                                 sharpe_variance=sharpe_variance)
 
 
 def format_prs_report(prs: dict) -> str:
@@ -520,4 +559,6 @@ def format_prs_report(prs: dict) -> str:
         lines.append(f"  {'-'*43}")
         lines.append(f"  {'TOTAL':<18} {'':>6} {'':>6} {total:>9.1f}")
     lines.append("═══════════════════════════════════════════")
+    for reason in prs.get("excluded_dimensions", []):
+        lines.append(f"  Excluded: {reason}")
     return "\n".join(lines)

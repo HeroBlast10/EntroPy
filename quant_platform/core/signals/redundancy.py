@@ -39,6 +39,7 @@ class RedundancyConfig:
     min_factors: int = 3
     max_factors: int = 5
     min_incremental_sharpe: float = 0.0
+    min_incremental_alpha_tstat: float = 0.0
     score_metric: str = "selection_score"
 
 
@@ -316,18 +317,21 @@ def _can_add_factor(
             "max_abs_return_corr_to_selected": 0.0,
             "max_abs_exposure_similarity_to_selected": 0.0,
             "incremental_sharpe": np.nan,
+            "incremental_alpha_tstat": np.nan,
         }
 
     max_sig = _max_abs_lookup(report.get("signal_correlation"), factor, selected)
     max_ret = _max_abs_lookup(report.get("factor_return_correlation"), factor, selected)
     max_exp = _max_abs_lookup(report.get("exposure_similarity"), factor, selected)
-    inc_sharpe = _incremental_sharpe(report.get("factor_return_panel"), factor, selected)
+    alpha_stats = _incremental_alpha_stats(report.get("factor_return_panel"), factor, selected)
+    inc_sharpe = alpha_stats["incremental_sharpe"]
 
     diagnostics = {
         "max_abs_signal_corr_to_selected": max_sig,
         "max_abs_return_corr_to_selected": max_ret,
         "max_abs_exposure_similarity_to_selected": max_exp,
         "incremental_sharpe": inc_sharpe,
+        **alpha_stats,
     }
 
     if pd.notna(max_sig) and max_sig > cfg.max_signal_corr:
@@ -338,6 +342,9 @@ def _can_add_factor(
         return False, "exposure_similarity_too_high", diagnostics
     if pd.notna(inc_sharpe) and inc_sharpe < cfg.min_incremental_sharpe:
         return False, "incremental_alpha_too_weak", diagnostics
+    alpha_t = alpha_stats["incremental_alpha_tstat"]
+    if pd.notna(alpha_t) and alpha_t < cfg.min_incremental_alpha_tstat:
+        return False, "incremental_alpha_tstat_below_threshold", diagnostics
 
     return True, "accepted", diagnostics
 
@@ -411,24 +418,53 @@ def _incremental_sharpe(
     selected: list[str],
     annualisation: int = 252,
 ) -> float:
+    """Annualised intercept / residual volatility (appraisal ratio).
+
+    Kept separate from the intercept's HAC t-statistic, which is not a Sharpe.
+    """
+    return _incremental_alpha_stats(return_panel, factor, selected, annualisation)["incremental_sharpe"]
+
+
+def _incremental_alpha_stats(return_panel, factor, selected, annualisation=252, hac_lag=None) -> Dict[str, float]:
+    """OLS intercept inference using a Bartlett Newey-West sandwich.
+
+    Uses the full regression design (including its intercept), not the HAC
+    standard error of residual means. Small-sample correction is n/(n-k).
+    """
+    empty = dict.fromkeys(("incremental_alpha", "incremental_alpha_hac_se", "incremental_alpha_tstat", "incremental_sharpe"), np.nan)
     if return_panel is None or return_panel.empty or factor not in return_panel.columns:
-        return np.nan
-    cols = [c for c in selected if c in return_panel.columns]
+        return empty
+    cols = list(dict.fromkeys(c for c in selected if c in return_panel.columns and c != factor))
     if not cols:
-        return np.nan
-    data = return_panel[[factor] + cols].dropna()
+        return empty
+    data = return_panel[[factor] + cols].sort_index().replace([np.inf, -np.inf], np.nan).dropna()
     if len(data) < max(20, len(cols) + 5):
-        return np.nan
+        return empty
 
     y = data[factor].to_numpy(dtype=float)
     x = data[cols].to_numpy(dtype=float)
     x = np.column_stack([np.ones(len(x)), x])
+    n, k = x.shape
+    if np.linalg.matrix_rank(x) < k:
+        return empty
     beta = np.linalg.lstsq(x, y, rcond=None)[0]
     residual = y - x @ beta
+    lag = min(n - 1, max(0, int(hac_lag if hac_lag is not None else np.floor(4 * (n / 100)**(2/9)))))
+    scores = x * residual[:, None]
+    meat = scores.T @ scores
+    for j in range(1, lag + 1):
+        cross = scores[j:].T @ scores[:-j]
+        meat += (1 - j / (lag + 1)) * (cross + cross.T)
+    bread = np.linalg.inv(x.T @ x)
+    covariance = bread @ meat @ bread * n / (n - k)
+    se = np.sqrt(max(float(covariance[0, 0]), 0.0))
     std = residual.std(ddof=1)
-    if std <= 0:
-        return np.nan
-    return float(residual.mean() / std * np.sqrt(annualisation))
+    return {
+        "incremental_alpha": float(beta[0]),
+        "incremental_alpha_hac_se": float(se),
+        "incremental_alpha_tstat": float(beta[0] / se) if se > 1e-15 else np.nan,
+        "incremental_sharpe": float(beta[0] / std * np.sqrt(annualisation)) if std > 1e-15 else np.nan,
+    }
 
 
 # ===================================================================

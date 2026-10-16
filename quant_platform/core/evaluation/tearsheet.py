@@ -393,6 +393,10 @@ def generate_factor_tearsheet(
         )
     else:
         prs_tbl = "<em>(no PRS data)</em>"
+    for reason in prs_result.get("excluded_dimensions", []):
+        prs_tbl += f"<p class='verdict-notes'>Excluded: {reason}. Remaining weights renormalised.</p>"
+    if not np.isfinite(prs_result.get("breakdown", {}).get("significance", {}).get("deflated_sharpe", np.nan)):
+        prs_tbl += "<p class='verdict-notes'>DSR unavailable: no DSR points awarded.</p>"
 
     # ── Gate / verdict notes ──
     gate_html = ""
@@ -559,6 +563,7 @@ def generate_all_tearsheets(
     *,
     comparisons: Optional[pd.DataFrame] = None,
     ic_decay_map: Optional[Dict[str, pd.DataFrame]] = None,
+    n_trials: Optional[int] = None,
 ) -> Dict[str, Path]:
     """Generate HTML tearsheets for all factors in *tearsheets*.
 
@@ -568,8 +573,8 @@ def generate_all_tearsheets(
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    prs_catalog = score_factor_catalog(tearsheets, comparisons)
-    prs_lookup = {row["factor"]: row for _, row in prs_catalog.iterrows()}
+    prs_catalog = score_factor_catalog(tearsheets, comparisons, n_trials=n_trials)
+    prs_lookup = {row["factor"]: row.to_dict() for _, row in prs_catalog.iterrows()}
 
     paths = {}
     for fname, ts in tearsheets.items():
@@ -581,6 +586,8 @@ def generate_all_tearsheets(
                 from quant_platform.core.evaluation.production_readiness import score_factor_readiness
                 prs_result = score_factor_readiness(
                     adv, ts.get("ic_stats", {}), ts.get("rank_ic_stats", {}),
+                    fdr_q=float(comparisons.loc[fname, "fdr_q_value"]) if comparisons is not None and fname in comparisons.index and "fdr_q_value" in comparisons else np.nan,
+                    deflated_sharpe=prs_row.get("deflated_sharpe", np.nan),
                     factor_name=fname,
                 )
             p = out / f"tearsheet_{fname}.html"

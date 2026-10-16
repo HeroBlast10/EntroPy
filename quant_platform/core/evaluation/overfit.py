@@ -26,6 +26,7 @@ def deflated_sharpe_ratio(
     n_obs: int,
     skew: float = 0.0,
     kurt: float = 3.0,
+    sharpe_variance: Optional[float] = None,
 ) -> float:
     """Compute the Deflated Sharpe Ratio (DSR).
 
@@ -34,22 +35,32 @@ def deflated_sharpe_ratio(
 
     Parameters
     ----------
-    sharpe : observed Sharpe ratio
+    sharpe : observed per-observation (not annualised) Sharpe ratio
     n_trials : number of strategy variants tested
     n_obs : number of return observations
     skew : skewness of returns
     kurt : kurtosis of returns (normal = 3)
+    sharpe_variance : variance across trial per-observation Sharpe estimates.
+        If omitted, uses the null sampling approximation 1/(n_obs-1).
+        n_trials assumes independent trials; correlated catalogs should supply
+        an effective trial count. This assumption must accompany reporting.
     """
     from scipy import stats
 
-    # Expected maximum Sharpe under null (all trials are noise)
-    e_max_sr = stats.norm.ppf(1 - 1.0 / n_trials) if n_trials > 1 else 0.0
-
-    # Standard error of Sharpe estimator
-    se = np.sqrt((1 + 0.5 * sharpe**2 - skew * sharpe + ((kurt - 3) / 4) * sharpe**2) / n_obs)
-
-    if se <= 0:
-        return 0.0
+    if n_trials < 1 or n_obs < 2:
+        return np.nan
+    variance = 1.0 / (n_obs - 1) if sharpe_variance is None else float(sharpe_variance)
+    if not np.isfinite([sharpe, skew, kurt, variance]).all() or variance < 0:
+        return np.nan
+    gamma = 0.5772156649015329
+    e_max_sr = np.sqrt(variance) * (
+        (1 - gamma) * stats.norm.ppf(1 - 1.0 / n_trials)
+        + gamma * stats.norm.ppf(1 - 1.0 / (n_trials * np.e))
+    ) if n_trials > 1 else 0.0
+    se2 = (1 - skew * sharpe + (kurt - 1) / 4 * sharpe**2) / (n_obs - 1)
+    if se2 <= 0 or not np.isfinite(se2):
+        return np.nan
+    se = np.sqrt(se2)
 
     # Probability that observed Sharpe exceeds the expected max under null
     dsr = float(stats.norm.cdf((sharpe - e_max_sr) / se))

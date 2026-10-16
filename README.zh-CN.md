@@ -241,7 +241,7 @@ quant_platform/
 │   ├── execution/              # 成本模型、向量化回测、PnL
 │   ├── evaluation/             # walk-forward、ablation、benchmark、capacity
 │   │   overfit.py              # ★ 完整组合 CSCV (Bailey et al. 2017)
-│   │   production_readiness.py # ★ 7 维生产就绪评分（PRS）
+│   │   production_readiness.py # ★ PRS：6 个核心维度；有实测代理时加入 crowding
 │   │   tearsheet.py            # ★ 因子 Discovery Tearsheet（HTML）
 │   │   report_story.py         # ★ 多因子 Decision Story 报告（HTML）
 │   └── experiments/            # YAML experiment runner

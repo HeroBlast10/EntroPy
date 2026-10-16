@@ -33,7 +33,7 @@ def capacity_analysis(
     tr["capacity_shares"] = pd.to_numeric(
         tr.get("requested_shares", tr["shares"]), errors="coerce"
     ).abs().fillna(0.0)
-    tr["adv_shares"] = pd.to_numeric(tr.get("adv_shares", np.nan), errors="coerce").replace(0, np.nan)
+    tr["adv_shares"] = pd.to_numeric(tr.get("adv_shares", pd.Series(np.nan, index=tr.index)), errors="coerce").replace(0, np.nan)
     tr["price"] = pd.to_numeric(tr.get("price", np.nan), errors="coerce")
     tr["notional"] = pd.to_numeric(tr.get("notional", tr.get("notional_trade", np.nan)), errors="coerce")
     tr["capacity_notional"] = pd.to_numeric(
@@ -44,19 +44,34 @@ def capacity_analysis(
         errors="coerce",
     )
 
-    # Capacity is based on desired order size, not the already-capped fill.
-    tr["participation_rate"] = tr["capacity_shares"] / tr["adv_shares"]
+    # Execution diagnostics describe fills; capacity describes desired orders.
+    valid_adv = tr["adv_shares"].gt(0) & tr["adv_shares"].ge(cost_model.min_adv_shares) & np.isfinite(tr["adv_shares"])
+    tr["adv_shares"] = tr["adv_shares"].where(valid_adv)
+    tr["requested_participation"] = tr["capacity_shares"] / tr["adv_shares"]
+    tr["executed_participation"] = tr["shares"] / tr["adv_shares"]
+    tr["participation_rate"] = tr["executed_participation"]
     tr["adv_dollar"] = tr["adv_shares"] * tr["price"]
     tr["adv_notional_pct"] = (
-        tr["capacity_notional"] / tr["adv_dollar"].replace(0, np.nan)
+        (tr["capacity_shares"] * tr["price"]) / tr["adv_dollar"].replace(0, np.nan)
     )
     base_capital = _base_capital(tr)
 
-    daily_participation = tr.groupby("date")["participation_rate"].max()
-    p95_participation = float(daily_participation.quantile(0.95)) if len(daily_participation) else np.nan
+    # Sub-share rounding rejects are not executable order requests. Including
+    # their zero-only retry days lets monthly rebalances fall outside p95 and
+    # spuriously inflates capacity by orders of magnitude.
+    active = tr.loc[tr["capacity_shares"].gt(0)].copy()
+    daily_requested = active.groupby("date")["requested_participation"].max()
+    p95_requested = float(daily_requested.quantile(0.95))
+    daily_participation = active.groupby("date")["executed_participation"].max()
+    p95_participation = float(daily_participation.quantile(0.95))
+    # Normalise out NAV growth: reported capacity is initial capital at which
+    # 95% of daily worst requested orders fit inside 10% ADV.
+    nav_scale = base_capital / active["portfolio_value_before_trade"].where(active["portfolio_value_before_trade"].gt(0)).fillna(base_capital)
+    normalized_daily = (active["requested_participation"] * nav_scale).groupby(active["date"]).max()
+    normalized_p95 = normalized_daily.quantile(0.95)
     capacity_10pct_adv = (
-        base_capital * 0.10 / p95_participation
-        if pd.notna(p95_participation) and p95_participation > 0
+        base_capital * 0.10 / normalized_p95
+        if pd.notna(normalized_p95) and normalized_p95 > 0
         else np.nan
     )
 
@@ -65,13 +80,23 @@ def capacity_analysis(
         "avg_participation_rate": float(tr["participation_rate"].mean()),
         "p95_participation_rate": p95_participation,
         "max_participation_rate": float(tr["participation_rate"].max()),
+        "avg_requested_participation": float(tr["requested_participation"].mean()),
+        "p95_requested_participation": p95_requested,
+        "max_requested_participation": float(tr["requested_participation"].max()),
+        "p95_executed_participation": p95_participation,
+        "max_executed_participation": float(tr["executed_participation"].max()),
+        "p95_aggregation": "95th percentile of daily maximum",
+        "p95_sample": "dates with at least one positive whole-share request; excludes zero-only rounding retries",
+        "capacity_basis": "requested orders, normalized to initial capital; not a full strategy replay",
+        "capacity_at_max_10pct_adv": float(base_capital * 0.10 / normalized_daily.max()) if normalized_daily.max() > 0 else np.nan,
+        "capacity_liquidity_coverage": float(tr.loc[tr["capacity_notional"].gt(0), "adv_shares"].notna().mean()),
         "avg_adv_notional_pct": float(tr["adv_notional_pct"].mean()),
-        "p95_adv_notional_pct": float(tr["adv_notional_pct"].quantile(0.95)),
+        "p95_adv_notional_pct": float(active.groupby("date")["adv_notional_pct"].max().quantile(0.95)),
         "max_adv_notional_pct": float(tr["adv_notional_pct"].max()),
         "capacity_at_10pct_adv": float(capacity_10pct_adv) if pd.notna(capacity_10pct_adv) else np.nan,
         "total_traded_notional": float(tr["notional"].sum()),
         "total_requested_notional": float(tr["capacity_notional"].sum()),
-        "total_cost": float(pd.to_numeric(tr.get("total_cost", 0.0), errors="coerce").fillna(0.0).sum()),
+        "total_cost": float(pd.to_numeric(tr.get("total_cost", pd.Series(0.0, index=tr.index)), errors="coerce").fillna(0.0).sum()),
     }])
 
     curve = _capital_curve(
@@ -98,13 +123,27 @@ def _capital_curve(
     for capital in capital_grid:
         scale = float(capital) / max(base_capital, 1.0)
         scaled = trades.copy()
-        scaled["shares"] = scaled["capacity_shares"] * scale
-        scaled["notional_trade"] = pd.to_numeric(
-            scaled.get("notional_trade", scaled.get("notional", 0.0)),
-            errors="coerce",
-        ).fillna(0.0) * scale
+        scaled["requested_shares"] = np.floor(scaled["capacity_shares"] * scale)
+        scaled["shares"] = scaled["requested_shares"]
+        eligible = scaled["price"].gt(0) & scaled["adv_shares"].ge(cost_model.min_adv_shares) & scaled["adv_shares"].gt(0)
+        if "fill_status" in scaled:
+            rejected = scaled["fill_status"].isin(["rejected_not_tradable", "rejected_missing_price"])
+            eligible &= ~rejected
+            scaled.loc[rejected, "shares"] = 0.0
+        if cost_model.max_participation_rate is not None:
+            # Respect the ticker/day budget even if input has several orders.
+            requested_daily = scaled.groupby(["date", "ticker"])["requested_shares"].transform("sum")
+            allowance = scaled["adv_shares"] * cost_model.max_participation_rate
+            ratio = (allowance / requested_daily.replace(0, np.nan)).clip(upper=1).fillna(0)
+            scaled["shares"] = np.floor(scaled["shares"] * ratio)
+            scaled.loc[~eligible, "shares"] = 0.0
+        scaled["notional_trade"] = scaled["shares"] * scaled["price"].fillna(0)
+        executed_participation = scaled["shares"] / scaled["adv_shares"]
+        # A different fill path changes holdings and PnL. Reusing gross_ret
+        # would be misleading; keep cost estimates, suppress return estimates.
+        same_fill_path = bool(np.allclose(scaled["shares"], trades["shares"] * scale, atol=1e-8, rtol=0))
         scaled["daily_vol"] = pd.to_numeric(
-            scaled["daily_vol"], errors="coerce"
+            scaled.get("daily_vol", pd.Series(0.02, index=scaled.index)), errors="coerce"
         ).fillna(0.02)
         estimable = (
             scaled["shares"].gt(0)
@@ -136,7 +175,7 @@ def _capital_curve(
         net_sharpe = np.nan
         net_ann_return = np.nan
         avg_daily_cost_bps = np.nan
-        if daily_pnl is not None and not daily_pnl.empty and "gross_ret" in daily_pnl.columns:
+        if same_fill_path and daily_pnl is not None and not daily_pnl.empty and "gross_ret" in daily_pnl.columns:
             pnl = daily_pnl.copy()
             if not isinstance(pnl.index, pd.DatetimeIndex):
                 pnl["date"] = pd.to_datetime(pnl["date"])
@@ -173,6 +212,12 @@ def _capital_curve(
             "total_cost": total_cost,
             "total_borrow_cost": total_borrow_cost,
             "total_notional": total_notional,
+            "requested_notional": float((scaled["requested_shares"] * scaled["price"].fillna(0)).sum()),
+            "max_requested_participation": float((scaled["requested_shares"] / scaled["adv_shares"]).max()),
+            "max_executed_participation": float(executed_participation.max()),
+            "fill_ratio": float(scaled["shares"].sum() / max(scaled["requested_shares"].sum(), 1)),
+            "return_estimate_valid": same_fill_path,
+            "return_estimate_note": "same scaled fills as base" if same_fill_path else "fill path changed; full execution replay required",
             "total_cost_bps": total_cost / max(total_notional, 1.0) * 10_000,
             "avg_daily_cost_bps": avg_daily_cost_bps,
             "net_ann_return_est": net_ann_return,
@@ -186,7 +231,7 @@ def _base_capital(trades: pd.DataFrame) -> float:
     if not vals.empty and vals.iloc[0] > 0:
         return float(vals.iloc[0])
     notional = pd.to_numeric(trades.get("notional", 0.0), errors="coerce").fillna(0.0)
-    delta = pd.to_numeric(trades.get("delta_weight", np.nan), errors="coerce").abs().replace(0, np.nan)
+    delta = pd.to_numeric(trades.get("delta_weight", pd.Series(np.nan, index=trades.index)), errors="coerce").abs().replace(0, np.nan)
     implied = (notional / delta).replace([np.inf, -np.inf], np.nan).dropna()
     return float(implied.median()) if not implied.empty else 1_000_000.0
 

@@ -135,6 +135,13 @@ def test_non_rebalance_retries_only_ticker_residual_without_retargeting_drift():
             ],
         }
     )
+    # Nine earlier observations plus Jan 1 give A ten observations. B reaches
+    # the ten-observation minimum only after the first retry's volume arrives.
+    warmup = pd.DataFrame([
+        {"date": dt, "ticker": ticker, "close": 10.0, "adj_close": 10.0, "volume": 10_000.0}
+        for dt in pd.bdate_range(end="2023-12-29", periods=9) for ticker in ("A", "B")
+    ])
+    prices = pd.concat([warmup, prices], ignore_index=True)
     weights = pd.DataFrame(
         {
             "date": [date for date in dates for _ in range(2)],
@@ -185,6 +192,11 @@ def test_new_rebalance_cancels_stale_ticker_residual():
             "volume": [10_000.0, np.nan] * len(all_dates),
         }
     )
+    warmup = pd.DataFrame([
+        {"date": dt, "ticker": ticker, "close": 10.0, "adj_close": 10.0, "volume": 10_000.0 if ticker == "A" else np.nan}
+        for dt in pd.bdate_range(end="2023-12-29", periods=9) for ticker in ("A", "B")
+    ])
+    prices = pd.concat([warmup, prices], ignore_index=True)
     # B is pending after the first target, but the next rebalance replaces
     # that target with 100% A.  The stale B instruction must never retry.
     weights = pd.DataFrame(
@@ -212,33 +224,33 @@ def test_new_rebalance_cancels_stale_ticker_residual():
 def test_execution_uses_cost_model_adv_lookback():
     from quant_platform.core.execution.backtest.vectorized_daily import simulate_execution
 
-    dates = pd.bdate_range("2024-01-02", periods=3)
+    dates = pd.bdate_range("2024-01-02", periods=7)
     prices = pd.DataFrame(
         {
             "date": dates,
             "ticker": "A",
             "close": 100.0,
             "adj_close": 100.0,
-            "volume": [100.0, 200.0, 300.0],
+            "volume": [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0],
         }
     )
     weights = pd.DataFrame(
         {
             "date": dates,
             "ticker": "A",
-            "weight": [0.0, 0.0, 1.0],
-            "is_rebalance": [False, False, True],
+            "weight": [0.0] * 6 + [1.0],
+            "is_rebalance": [False] * 6 + [True],
         }
     )
     trades = simulate_execution(
         weights,
         prices,
-        _zero_cost_model(adv_lookback=1),
+        _zero_cost_model(adv_lookback=5),
         initial_capital=10_000.0,
     )
     assert trades.loc[
-        trades["date"].eq(dates[2]), "adv_shares"
-    ].iloc[0] == 200.0
+        trades["date"].eq(dates[-1]), "adv_shares"
+    ].iloc[0] == 400.0
 
 
 def test_missing_price_and_participation_do_not_fake_fills():

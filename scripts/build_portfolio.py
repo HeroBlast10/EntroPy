@@ -72,13 +72,17 @@ logger.add(sys.stderr, level="INFO", format=(
               help="Max one-way turnover per rebalance (e.g. 0.30).")
 @click.option("--risk-aversion", type=float, default=1.0,
               help="Risk aversion λ for optimised method.")
+@click.option("--expected-alpha-annual", type=float, default=0.10,
+              help="Annual top-to-bottom expected-return spread used to scale ranked alpha.")
+@click.option("--fallback-method", type=click.Choice(["quantile"]), default=None,
+              help="Explicitly allow quantile fallback on optimisation failure (recorded in metadata).")
 @click.option("--no-factor-risk", is_flag=True, default=False,
               help="Disable FactorRiskModel covariance in optimized portfolios.")
 @click.option("--turnover-penalty", type=float, default=0.0,
               help="Quadratic turnover penalty for optimized portfolios.")
 def main(method, signal, factors, combiner, baseline_factor, regime_col,
          mode, weight, freq, n_quantiles, top_n,
-         max_stock_weight, max_sector_weight, max_turnover, risk_aversion,
+         max_stock_weight, max_sector_weight, max_turnover, risk_aversion, expected_alpha_annual, fallback_method,
          no_factor_risk, turnover_penalty):
     """EntroPy — Build portfolio weights from factor signals."""
     set_project_root(_project_root)
@@ -100,6 +104,7 @@ def main(method, signal, factors, combiner, baseline_factor, regime_col,
     constructor_kwargs = {}
     if method == "optimize":
         constructor_kwargs["risk_aversion"] = risk_aversion
+        constructor_kwargs["expected_alpha_annual"] = expected_alpha_annual
         constructor_kwargs["use_factor_risk"] = not no_factor_risk
         constructor_kwargs["turnover_penalty"] = turnover_penalty
 
@@ -111,6 +116,7 @@ def main(method, signal, factors, combiner, baseline_factor, regime_col,
         multi_factor_method=combiner,
         baseline_factors=list(baseline_factor) if baseline_factor else None,
         regime_col=regime_col,
+        fallback_method=fallback_method,
         **constructor_kwargs,
     )
 

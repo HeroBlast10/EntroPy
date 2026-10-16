@@ -410,8 +410,11 @@ backtest:
 <h2 id="ch5">Chapter 5: Production Readiness Ranking</h2>
 <div class="card">
   <div class="narrative">
-    Every factor is scored on 7 dimensions (significance, stability, economic significance, capacity,
-    crowding, cross-section width, implementation cost) and receives a <strong>Production Readiness Score</strong> (0-100).
+    Every factor is scored on six core dimensions (significance, stability, economic significance,
+    capacity, cross-section width, implementation cost). Crowding is included only when a measured
+    proxy is supplied; otherwise it is excluded and weights are renormalised. Catalog DSR uses
+    gross daily long-short returns and assumes independent trials equal to the catalog size.
+    The result is a <strong>Production Readiness Score</strong> (0-100).
   </div>
   {_img(b_prs) if b_prs else ""}
   {_df_html(prs_df[["factor","total","verdict","significance","stability","economic","capacity"]].head(20))}
@@ -435,7 +438,7 @@ backtest:
   <p><strong>Next steps:</strong></p>
   <ol style="font-size:13.5px;">
     <li>Run <code>python scripts/run_experiment.py --config &lt;generated_yaml&gt;</code> for end-to-end backtest.</li>
-    <li>Review capacity curves — scale capital until net Sharpe drops &gt; 30%.</li>
+    <li>Review capacity curves and rerun the execution simulation when participation caps change the fill path.</li>
     <li>Monitor crowding scores quarterly; rotate to less-crowded factors if exposure spikes.</li>
     <li>Rerun PRS annually or after major market regime change.</li>
   </ol>

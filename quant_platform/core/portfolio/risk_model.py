@@ -6,7 +6,7 @@ Implements a multi-factor risk model that decomposes portfolio risk into:
 
 Model structure:
     Stock Return = β_mkt × R_mkt + β_size × R_size + β_sector × R_sector + ε
-    Portfolio Risk = Σ_factor(exposure² × variance) + Σ_stock(weight² × specific_risk²)
+    Portfolio Variance = b' F b + Σ_stock(weight² × specific_risk²)
 """
 from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
@@ -47,6 +47,48 @@ class FactorRiskModel:
         
         # Specific risk
         self.specific_risk_: Optional[pd.Series] = None  # ticker → σ_specific
+        self.factor_returns_: Optional[pd.DataFrame] = None
+
+    @staticmethod
+    def build_structural_factors(stock_returns: pd.DataFrame, market_caps: pd.DataFrame) -> pd.DataFrame:
+        """Market and SMB returns independent of the candidate alpha.
+
+        Size is equal-weight small minus big, split at the lagged cross-section
+        median log market cap. Caps are shifted before aligning with returns,
+        so today's cap (or a future cap) cannot choose today's size sleeves.
+        Sector excess returns are added by fit(). No value factor is invented
+        when point-in-time fundamentals are unavailable.
+        """
+        returns = stock_returns.replace([np.inf, -np.inf], np.nan).sort_index()
+        caps = market_caps.sort_index().reindex(columns=returns.columns)
+        log_caps = np.log(caps.where(caps > 0)).shift(1).reindex(returns.index)
+        ranks = log_caps.rank(axis=1, method="average", pct=True)
+        factors = pd.DataFrame(index=returns.index)
+        factors["market"] = returns.mean(axis=1)
+        factors["size"] = returns.where(ranks <= 0.5).mean(axis=1) - returns.where(ranks > 0.5).mean(axis=1)
+        return factors
+
+    @staticmethod
+    def _sector_factors(stock_returns, factor_returns, sector_map):
+        """Append K-1 sector excess returns, omitting a reference sector.
+
+        A static map is assumed valid throughout the estimation window. Users
+        must supply dated historical classifications for point-in-time claims.
+        """
+        factors = factor_returns.copy()
+        if sector_map is None or sector_map.empty:
+            return factors
+        if sector_map["ticker"].duplicated().any():
+            raise ValueError("sector_map must have one row per ticker")
+        mapping = sector_map.set_index("ticker")["sector"].reindex(stock_returns.columns)
+        if mapping.isna().any():
+            raise ValueError("sector_map is incomplete for the fitted stocks")
+        sectors = sorted(mapping.unique(), key=str)
+        market = factors.get("market", stock_returns.mean(axis=1))
+        for sector in sectors[1:]:
+            members = mapping.index[mapping.eq(sector)]
+            factors[f"sector:{sector}"] = stock_returns[members].mean(axis=1) - market
+        return factors
 
     def fit(
         self,
@@ -69,6 +111,10 @@ class FactorRiskModel:
         -------
         self
         """
+        if "alpha_spread" in factor_returns:
+            raise ValueError("Candidate alpha_spread must not be a risk factor")
+        factor_returns = self._sector_factors(stock_returns, factor_returns, sector_map)
+        self.factor_returns_ = factor_returns
         # 1. Estimate factor exposures (betas) for each stock
         self.exposures_ = self._estimate_exposures(
             stock_returns, factor_returns, sector_map
@@ -266,7 +312,7 @@ class FactorRiskModel:
         """Decompose portfolio risk into factor and specific components.
 
         Portfolio Variance = Factor Risk + Specific Risk
-        Factor Risk = Σ_k (portfolio_exposure_k² × factor_variance_k)
+        Factor Risk = b' F b (including factor cross-covariances)
         Specific Risk = Σ_i (weight_i² × specific_risk_i²)
 
         Parameters
@@ -303,6 +349,13 @@ class FactorRiskModel:
                 "factor_risk": 0.0,
                 "specific_risk": 0.0,
                 "factor_contributions": {},
+                "factor_variance": 0.0,
+                "specific_variance": 0.0,
+                "specific_contributions": {},
+                "volatility_contributions": {},
+                "portfolio_exposures": {},
+                "euler_variance_error": 0.0,
+                "euler_volatility_error": 0.0,
             }
         
         # 1. Portfolio factor exposures = weighted average of stock exposures
@@ -329,6 +382,17 @@ class FactorRiskModel:
             contribution = portfolio_exposures[i] * Fb[i]
             factor_contributions[factor_name] = float(contribution)
         
+        specific_contributions = (w**2 * self.specific_risk_.loc[common_tickers]**2).to_dict()
+        # Euler contributions to volatility add to total volatility; standalone
+        # factor/specific volatilities above do not add linearly.
+        volatility_contributions = {
+            **{f"factor:{k}": v / total_risk if total_risk > 0 else 0.0 for k, v in factor_contributions.items()},
+            **{f"specific:{k}": v / total_risk if total_risk > 0 else 0.0 for k, v in specific_contributions.items()},
+        }
+        variance_error = sum(factor_contributions.values()) + sum(specific_contributions.values()) - total_variance
+        volatility_error = sum(volatility_contributions.values()) - total_risk
+        if not np.isclose(variance_error, 0, atol=1e-10) or not np.isclose(volatility_error, 0, atol=1e-10):
+            raise RuntimeError("Euler risk contributions do not add to total risk")
         return {
             "total_risk": float(total_risk),
             "factor_risk": float(np.sqrt(factor_variance)),
@@ -336,6 +400,10 @@ class FactorRiskModel:
             "factor_variance": float(factor_variance),
             "specific_variance": float(specific_variance),
             "factor_contributions": factor_contributions,
+            "specific_contributions": specific_contributions,
+            "volatility_contributions": volatility_contributions,
+            "euler_variance_error": float(variance_error),
+            "euler_volatility_error": float(volatility_error),
             "portfolio_exposures": dict(zip(self.factor_names_, portfolio_exposures)),
         }
     

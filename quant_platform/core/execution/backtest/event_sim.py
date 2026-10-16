@@ -190,14 +190,17 @@ class VectorizedBacktest:
         close_wide = prices.pivot_table(
             index="date", columns=price_ticker, values=close_col, aggfunc="last"
         )
-        dates = close_wide.index
-        tickers = close_wide.columns.tolist()
+        # pivot_table drops dates whose prices are all missing. Preserve the
+        # input calendar so pct_change cannot bridge across those gaps.
+        dates = pd.DatetimeIndex(sorted(prices["date"].unique()), name="date")
+        tickers = sorted(prices[price_ticker].dropna().unique())
+        close_wide = close_wide.reindex(index=dates, columns=tickers)
 
         return_col = "adj_close" if "adj_close" in prices.columns else close_col
         return_wide = prices.pivot_table(
             index="date", columns=price_ticker, values=return_col, aggfunc="last"
         ).reindex(index=dates, columns=tickers)
-        ret_wide = return_wide.pct_change()
+        ret_wide = return_wide.pct_change(fill_method=None)
         ret_mat = ret_wide.values
         close_mat = close_wide.values
 
@@ -210,6 +213,7 @@ class VectorizedBacktest:
             "is_suspended",
             "is_new_listing",
             "pass_all_filters",
+            "is_tradable",
         }
         candidates = [
             c
@@ -235,6 +239,10 @@ class VectorizedBacktest:
         # later by order direction: limit-up blocks buys only, limit-down sells.
         eligible_mat = np.ones_like(signal_mat, dtype=bool)
         eligible_mat &= ~np.isnan(close_mat) & (close_mat > 0)
+        for frame, key in ((prices, price_ticker), (panel, ticker_col)):
+            if "is_tradable" in frame:
+                flags = frame.pivot_table(index="date", columns=key, values="is_tradable", aggfunc="last").reindex(index=dates, columns=tickers)
+                eligible_mat &= flags.fillna(False).to_numpy(dtype=bool)
         limit_up_mat = np.zeros_like(signal_mat, dtype=bool)
         limit_down_mat = np.zeros_like(signal_mat, dtype=bool)
 
@@ -492,7 +500,7 @@ class VectorizedBacktest:
             previous_nav = nav_after_cost
 
         nav = pd.Series(nav_values, index=dates, name="nav")
-        daily_ret = nav.pct_change()
+        daily_ret = nav.pct_change(fill_method=None)
         if len(daily_ret):
             daily_ret.iloc[0] = nav.iloc[0] / self.config.initial_capital - 1.0
         turnover = pd.Series(turnover_values, index=dates, name="turnover")

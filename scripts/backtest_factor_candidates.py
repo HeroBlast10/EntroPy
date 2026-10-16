@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import os
-import shutil
+import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 from quant_platform.core.execution.backtest.pipeline import run_trading_pipeline
 from quant_platform.core.execution.cost_models.us_equity import CostModel
 from quant_platform.core.data.benchmark import load_benchmark
+from quant_platform.core.data.sectors import ensure_sector_map
 from quant_platform.core.evaluation.benchmark_analytics import benchmark_analysis
 from quant_platform.core.portfolio.construction import PortfolioConfig, PortfolioMode, WeightScheme
 from quant_platform.core.portfolio.pipeline import _compute_avg_turnover, run_portfolio_pipeline
@@ -25,11 +27,58 @@ from quant_platform.core.utils.io import set_project_root
 CANDIDATES = ["MOM_12_1M", "STR_1W", "TURNOVER_ACCEL"]
 
 
+def refresh_capacity(output_root: Path) -> None:
+    """Recompute analytics from preserved fills without reusing stale p95s."""
+    from quant_platform.core.evaluation.capacity import capacity_analysis
+    from quant_platform.core.utils.provenance import write_run_metadata
+
+    summary_path = output_root / "candidate_summary.csv"
+    summary = pd.read_csv(summary_path).set_index("factor")
+    summary = summary.loc[:, ~summary.columns.str.startswith("capacity_")]
+    capacity_rows = []
+    inputs = {"capacity_source": ROOT / "quant_platform/core/evaluation/capacity.py", "runner_source": Path(__file__)}
+    for factor in summary.index:
+        factor_dir = output_root / factor
+        meta = json.loads((factor_dir / "backtest_metadata.json").read_text(encoding="utf-8"))
+        model = CostModel(**meta["cost_model"])
+        capital = float(meta["initial_capital"])
+        trades_path = factor_dir / "trades.parquet"
+        pnl_path = factor_dir / "daily_pnl.parquet"
+        capacity = capacity_analysis(pd.read_parquet(trades_path), pd.read_parquet(pnl_path),
+                                     cost_model=model, capital_grid=[capital, capital*5, capital*10, capital*50])
+        row = capacity["summary"].iloc[0].to_dict()
+        limit = model.max_participation_rate
+        if limit is not None:
+            if row["max_executed_participation"] > limit + 1e-12 or capacity["capital_curve"]["max_executed_participation"].max() > limit + 1e-12:
+                raise RuntimeError(f"{factor}: executed participation exceeds limit")
+        capacity["summary"].to_csv(factor_dir / "capacity_summary.csv", index=False)
+        capacity["capital_curve"].to_csv(factor_dir / "capacity_curve.csv", index=False)
+        capacity_rows.append({"factor": factor, **{f"capacity_{key}" if not key.startswith("capacity_") else key: value for key, value in row.items()}})
+        inputs[f"{factor}_trades"] = trades_path
+        inputs[f"{factor}_daily_pnl"] = pnl_path
+        inputs[f"{factor}_execution_metadata"] = factor_dir / "backtest_metadata.json"
+        print(f"{factor}: p95 capacity=${row['capacity_at_10pct_adv']:,.0f}, "
+              f"all-date capacity=${row['capacity_at_max_10pct_adv']:,.0f}, "
+              f"max executed participation={row['max_executed_participation']:.4%}")
+    summary.join(pd.DataFrame(capacity_rows).set_index("factor")).to_csv(summary_path)
+    write_run_metadata(output_root / "capacity_refresh_metadata.json", stage="refresh_candidate_capacity",
+                       inputs=inputs, params={"factors": list(summary.index)},
+                       extra={"note": "Final capacity analytics recomputed from the preserved full execution reruns."})
+
+
 def main() -> None:
     set_project_root(ROOT)
-    output_root = ROOT / "data" / "experiments" / "candidate_backtests_20260721"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "data" / "experiments" / "candidate_backtests_20261016")
+    parser.add_argument("--refresh-capacity", action="store_true", help="Recompute capacity from preserved trades and daily PnL.")
+    args = parser.parse_args()
+    output_root = args.output_dir.resolve()
+    if args.refresh_capacity:
+        refresh_capacity(output_root)
+        return
     output_root.mkdir(parents=True, exist_ok=True)
     benchmark = load_benchmark("us").set_index("date")["return"]
+    sector_map = ensure_sector_map(allow_fetch=False)
     rows = []
 
     config = PortfolioConfig(
@@ -59,10 +108,14 @@ def main() -> None:
 
     for factor in candidates:
         print(f"\n=== {factor} ===", flush=True)
+        factor_dir = output_root / factor
+        factor_dir.mkdir(parents=True, exist_ok=True)
         portfolio = run_portfolio_pipeline(
             method="quantile",
             signal_col=factor,
             config=config,
+            sector_map=sector_map,
+            output_path=factor_dir / "weights.parquet",
         )
         weights = portfolio["weights"]
         exposure = weights.groupby("date")["weight"].agg(
@@ -79,6 +132,7 @@ def main() -> None:
             weights_path=portfolio["output_path"],
             cost_model=cost_model,
             initial_capital=1_000_000.0,
+            output_dir=factor_dir,
         )
         perf = result["performance"]
         daily_pnl = result["daily_pnl"].copy()
@@ -90,11 +144,9 @@ def main() -> None:
         benchmark_metrics = benchmark_analysis(
             net_returns, benchmark,
         )
-        factor_dir = output_root / factor
-        factor_dir.mkdir(parents=True, exist_ok=True)
-        for path in (ROOT / "data" / "backtest").iterdir():
-            if path.is_file():
-                shutil.copy2(path, factor_dir / path.name)
+        capacity_summary = result["capacity"]["summary"].iloc[0].to_dict()
+        if capacity_summary["max_executed_participation"] > cost_model.max_participation_rate + 1e-12:
+            raise RuntimeError(f"{factor}: executed participation exceeds limit")
 
         rows.append({
             "factor": factor,
@@ -103,6 +155,7 @@ def main() -> None:
             "avg_short_count": exposure["short_count"].mean(),
             "avg_portfolio_turnover": _compute_avg_turnover(weights),
             **perf,
+            **{f"capacity_{key}" if not key.startswith("capacity_") else key: value for key, value in capacity_summary.items()},
             **{f"benchmark_{key}": value for key, value in benchmark_metrics.items()},
         })
         print(
@@ -144,6 +197,7 @@ def main() -> None:
             "factors": resolve_data_path("factors", "factors.parquet"),
             "prices": resolve_data_path("prices", "prices.parquet"),
             "universe": resolve_data_path("universe", "universe.parquet"),
+            "sector_map": resolve_data_path("reference", "sector_map.parquet"),
         },
         params={
             "candidates": candidates,
@@ -152,13 +206,6 @@ def main() -> None:
             "initial_capital": 1_000_000.0,
         },
         extra={"summary_path": str(summary_path)},
-    )
-    write_run_metadata(
-        ROOT / "data" / "backtest" / "run_metadata.json",
-        stage="backtest_factor_candidates",
-        inputs={"factors": resolve_data_path("factors", "factors.parquet")},
-        params={"candidates": candidates},
-        extra={"note": "copied from the per-factor run; see the experiment dir"},
     )
     print(f"\nWrote run metadata to {output_root / 'run_metadata.json'}", flush=True)
 
