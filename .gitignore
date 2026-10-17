@@ -68,3 +68,16 @@ local_docs/
 
 # Snapshot taken before a full artifact rebuild (local comparison copies only)
 data/_backup_*/
+
+# ---------------------------------------------------------------------------
+# WRDS data is subscription-licensed: committing it would breach the licence
+# and would also be unreproducible for anyone without the same entitlement.
+# All WRDS products are pulled into data/wrds/ by scripts/wrds_pull.py and are
+# rebuilt from source, not stored.
+data/wrds/
+
+# WRDS credentials. scripts/wrds_setup_auth.py writes to PostgreSQL's pgpass;
+# the JSON alternatives below are supported for convenience only.
+config/wrds_credentials.json
+.wrds_credentials.json
+pgpass.conf
