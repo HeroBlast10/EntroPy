@@ -36,6 +36,10 @@ are separate experiments. They do not inherit the new acceptance checks.
    unknown reporting currencies suppress the corresponding ratios. New
    issuer/class relationships are never backfilled. Security-level market
    cap is retained separately for trading/universe decisions.
+   This is the CRSP-observable common-equity scope; unlisted/private classes
+   have no independently observed CRSP market price and are not manufactured
+   as extra daily values. An issuer-total valuation beyond this scope needs
+   separately verified share-class disclosures and a stated pricing rule.
 6. Membership/identity and financial vintage have independent admission
    gates. `--allow-restated-fundamentals` admits revised fundq research only.
    The deprecated `--allow-non-pit-research` has the same narrow scope; it

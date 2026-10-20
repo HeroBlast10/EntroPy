@@ -7,7 +7,7 @@ import pytest
 
 from quant_platform.core.alpha_models.nonlinear_alpha import (
     select_usable_features, build_learning_panel, run_walk_forward_oof,
-    WalkForwardConfig, LightGBMConfig,
+    WalkForwardConfig, LightGBMConfig, MLPConfig,
 )
 from quant_platform.core.data.returns import (
     forward_total_returns, overnight_total_return, trailing_total_return,
@@ -133,8 +133,9 @@ def test_feature_whitelist_rejects_identifiers_and_provenance_even_when_explicit
 
 
 @pytest.mark.parametrize("row_cap", [None, 300])
-def test_permno_renumbering_preserves_corresponding_lightgbm_predictions(row_cap):
-    pytest.importorskip("lightgbm")
+@pytest.mark.parametrize("model", ["lightgbm", "mlp"])
+def test_permno_renumbering_preserves_corresponding_predictions(row_cap, model):
+    pytest.importorskip("lightgbm" if model == "lightgbm" else "torch")
     rng = np.random.default_rng(10)
     dates = pd.bdate_range("2020-01-02", periods=65)
     idx = pd.MultiIndex.from_product([dates, range(1, 13)], names=["date", "permno"])
@@ -150,7 +151,8 @@ def test_permno_renumbering_preserves_corresponding_lightgbm_predictions(row_cap
     cfg = LightGBMConfig(n_estimators=15, min_child_samples=10, bagging_fraction=.7, n_jobs=1)
     def fit(f, p, u):
         panel, features = build_learning_panel(f, p, u, min_cross_section=5)
-        return run_walk_forward_oof(panel, features, model="lightgbm", walk_forward=wf, lightgbm=cfg)[0]
+        return run_walk_forward_oof(panel, features, model=model, walk_forward=wf, lightgbm=cfg,
+                                   mlp=MLPConfig(epochs=1, hidden_width=8, batch_size=64, inference_batch_size=128))[0]
     original = fit(f, p, u)
     mapping = {f"PERMNO:{i}": f"PERMNO:{100-i*3}" for i in range(1, 13)}
     f2, p2, u2 = f.copy(), p.copy(), u.copy()

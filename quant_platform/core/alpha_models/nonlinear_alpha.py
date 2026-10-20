@@ -448,6 +448,8 @@ def _fit_predict_mlp(
     seed: int,
     feature_names: list[str],
 ) -> tuple[np.ndarray, pd.Series]:
+    import os
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     try:
         import torch
         from torch import nn
@@ -457,7 +459,7 @@ def _fit_predict_mlp(
 
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.use_deterministic_algorithms(True)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.benchmark = False
@@ -584,6 +586,9 @@ def run_walk_forward_oof(
             wf.seed + fold["fold"],
         )
         validation_indices = np.flatnonzero(validation_mask)
+        prediction_order = panel.iloc[validation_indices][["date", *feature_names]].reset_index(drop=True)
+        canonical_validation = prediction_order.sort_values(["date", *feature_names], kind="mergesort").index
+        validation_indices = validation_indices[canonical_validation]
         if len(train_indices) == 0:
             raise ValueError(
                 f"Fold {fold['fold']} has no non-null training targets"
