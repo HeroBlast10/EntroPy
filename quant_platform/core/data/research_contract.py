@@ -19,7 +19,7 @@ def require_wrds_identity(universe, *frames):
         if ids.isna().any() or ids.mod(1).ne(0).any() or ids.le(0).any():
             raise ValueError("Invalid PERMNO identifier")
         aliases = "PERMNO:" + ids.astype("int64").astype(str)
-        if not aliases.eq(frame.ticker).all():
+        if not aliases.eq(frame.ticker).fillna(False).all():
             raise ValueError("WRDS ticker must be the stable PERMNO alias, never an exchange ticker")
         if pd.to_datetime(frame.date, errors="coerce").isna().any():
             raise ValueError("Invalid WRDS date key")
@@ -41,5 +41,5 @@ def require_financial_vintage(fundamentals, features, *, allow_restated=False):
         raise ValueError("Missing financial availability/vintage provenance")
     if pd.to_datetime(fundamentals.available_date, errors="coerce").isna().any():
         raise ValueError("Missing financial availability date")
-    if not allow_restated and not fundamentals.is_point_in_time.eq(True).all():
+    if not allow_restated and not fundamentals.is_point_in_time.eq(True).fillna(False).all():
         raise ValueError("Restated fundamentals require --allow-restated-fundamentals; universe PIT remains mandatory")

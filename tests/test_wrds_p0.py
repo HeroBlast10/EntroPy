@@ -274,8 +274,12 @@ def test_restated_financial_waiver_never_waives_universe_or_primary_key():
     require_wrds_identity(u, u)
     with pytest.raises(ValueError, match="Restated"):
         require_financial_vintage(fund, ["EARNINGS_YIELD"])
+    with pytest.raises(ValueError, match="Restated"):
+        require_financial_vintage(fund.assign(is_point_in_time=pd.Series([pd.NA], dtype="boolean")), ["EARNINGS_YIELD"])
     for bad in (u.assign(membership_is_point_in_time=False), u.assign(membership_is_point_in_time="False"),
-                u.assign(ticker="REUSED"), u.drop(columns="permno")):
+                u.assign(ticker="REUSED"), u.drop(columns="permno"),
+                u.assign(membership_is_point_in_time=pd.Series([pd.NA], dtype="boolean")),
+                u.assign(ticker=pd.Series([pd.NA], dtype="string")), u.assign(membership_source=None)):
         with pytest.raises(ValueError):
             require_wrds_identity(bad)
     from scripts.evaluate_nonlinear_alpha import _validate_point_in_time_contract
