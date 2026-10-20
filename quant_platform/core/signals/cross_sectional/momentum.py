@@ -390,7 +390,7 @@ class ResidualMomentum(FactorBase):
 # ===================================================================
 
 class OvernightReturn1M(FactorBase):
-    """1-month average of overnight returns: open(t) / close(t-1) - 1.
+    """1-month mean of distribution-inclusive overnight total returns.
 
     References
     ----------
@@ -411,7 +411,7 @@ class OvernightReturn1M(FactorBase):
         name="OVERNIGHT_RET_21D",
         category="microstructure",
         signal_type="cross_sectional",
-        description="21-day mean overnight return: open(t)/close(t-1) - 1 (Lou-Polk-Skouras 2019)",
+        description="21-day mean distribution-inclusive overnight return: (1+RET)*open/close-1",
         lookback=22,
         lag=1,
         direction=1,

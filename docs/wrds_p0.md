@@ -11,6 +11,9 @@ are separate experiments. They do not inherit the new acceptance checks.
    features require an explicit declaration. Identifiers and provenance are
    forbidden even in explicit lists. Training row ordering, bagging, capped
    sampling and prediction normalization are independent of PERMNO numbering.
+   This also applies to legacy Ridge/Lasso/ElasticNet and their cross-validation
+   and walk-forward wrappers; custom columns use `feature_cols=[...]` in the
+   model constructor. MLP CUDA execution requires deterministic algorithms.
 2. Returns dated t cover (t-1,t]. Direct CIZ total returns take precedence
    over adjusted-price ratios. CIZ delisting returns are already embedded.
    The shared calendar is the complete supplied market tape; never prefilter

@@ -120,7 +120,7 @@ def test_ml_alpha_model_fit(sample_factor_data):
     factors = df[["date", "ticker", "momentum", "value", "quality"]]
     returns = df.set_index(["date", "ticker"])["forward_return"]
     
-    model = MLAlphaModel(model_type="ridge", alpha=1.0)
+    model = MLAlphaModel(feature_cols=['momentum', 'value', 'quality'], model_type="ridge", alpha=1.0)
     model.fit(factors, returns)
     
     # Check that model is fitted
@@ -144,7 +144,7 @@ def test_ml_alpha_model_predict(sample_factor_data):
     factors_test = test[["date", "ticker", "momentum", "value", "quality"]]
     
     # Fit model
-    model = MLAlphaModel(model_type="ridge", alpha=1.0)
+    model = MLAlphaModel(feature_cols=['momentum', 'value', 'quality'], model_type="ridge", alpha=1.0)
     model.fit(factors_train, returns_train)
     
     # Predict
@@ -163,7 +163,7 @@ def test_ml_alpha_model_types(sample_factor_data):
     returns = df.set_index(["date", "ticker"])["forward_return"]
     
     for model_type in ["ridge", "lasso", "elastic_net"]:
-        model = MLAlphaModel(model_type=model_type, alpha=0.1)
+        model = MLAlphaModel(feature_cols=['momentum', 'value', 'quality'], model_type=model_type, alpha=0.1)
         model.fit(factors, returns)
         
         # Should fit successfully
@@ -181,7 +181,7 @@ def test_feature_importance(sample_factor_data):
     factors = df[["date", "ticker", "momentum", "value", "quality"]]
     returns = df.set_index(["date", "ticker"])["forward_return"]
     
-    model = MLAlphaModel(model_type="ridge", alpha=1.0)
+    model = MLAlphaModel(feature_cols=['momentum', 'value', 'quality'], model_type="ridge", alpha=1.0)
     model.fit(factors, returns)
     
     importance = model.get_feature_importance(top_n=3)
@@ -201,7 +201,7 @@ def test_cross_validate(sample_factor_data):
     factors = df[["date", "ticker", "momentum", "value", "quality"]]
     returns = df.set_index(["date", "ticker"])["forward_return"]
     
-    model = MLAlphaModel(model_type="ridge", alpha=1.0)
+    model = MLAlphaModel(feature_cols=['momentum', 'value', 'quality'], model_type="ridge", alpha=1.0)
     cv_results = model.cross_validate(factors, returns, n_splits=3)
     
     assert "mean_r2" in cv_results
@@ -228,6 +228,7 @@ def test_walk_forward_basic(sample_factor_data):
     returns = df.set_index(["date", "ticker"])["forward_return"]
     
     wf = WalkForwardMLAlpha(
+        feature_cols=['momentum', 'value', 'quality'],
         model_type="ridge",
         alpha=1.0,
         refit_freq=21,
@@ -251,6 +252,7 @@ def test_walk_forward_retraining(sample_factor_data):
     returns = df.set_index(["date", "ticker"])["forward_return"]
     
     wf = WalkForwardMLAlpha(
+        feature_cols=['momentum', 'value', 'quality'],
         model_type="ridge",
         alpha=1.0,
         refit_freq=30,
@@ -274,6 +276,7 @@ def test_walk_forward_feature_importance(sample_factor_data):
     returns = df.set_index(["date", "ticker"])["forward_return"]
     
     wf = WalkForwardMLAlpha(
+        feature_cols=['momentum', 'value', 'quality'],
         model_type="ridge",
         alpha=1.0,
         refit_freq=30,
@@ -299,6 +302,7 @@ def test_walk_forward_no_lookahead(sample_factor_data):
     returns = df.set_index(["date", "ticker"])["forward_return"]
     
     wf = WalkForwardMLAlpha(
+        feature_cols=['momentum', 'value', 'quality'],
         model_type="ridge",
         alpha=1.0,
         refit_freq=21,
@@ -340,7 +344,7 @@ def test_ml_alpha_with_missing_features():
         ),
     )
     
-    model = MLAlphaModel(model_type="ridge")
+    model = MLAlphaModel(feature_cols=['f1', 'f2', 'f3'], model_type="ridge")
     model.fit(train_data, train_returns)
     
     # Test with only 2 features (missing f3)
@@ -360,7 +364,7 @@ def test_ml_alpha_with_no_data():
     empty_factors = pd.DataFrame(columns=["date", "ticker", "f1", "f2"])
     empty_returns = pd.Series(dtype=float)
     
-    model = MLAlphaModel(model_type="ridge")
+    model = MLAlphaModel(feature_cols=['f1', 'f2'], model_type="ridge")
     model.fit(empty_factors, empty_returns)
     
     # Should not crash, but model won't be fitted
@@ -381,7 +385,7 @@ def test_ml_alpha_all_missing_features_keeps_fit_contract():
             names=["date", "ticker"],
         ),
     )
-    model = MLAlphaModel()
+    model = MLAlphaModel(feature_cols=['f1'])
     assert model.fit(factors, returns) is model
     assert model.model_ is None
 
@@ -394,7 +398,7 @@ def test_ml_alpha_rejects_ambiguous_positional_target_alignment():
     })
     shuffled_target = pd.Series([0.02, 0.01], index=[1, 0])
     with pytest.raises(ValueError, match="same index"):
-        MLAlphaModel().fit(factors, shuffled_target)
+        MLAlphaModel(feature_cols=['f1']).fit(factors, shuffled_target)
 
 
 def test_ml_alpha_rejects_duplicate_factor_keys():
@@ -412,7 +416,7 @@ def test_ml_alpha_rejects_duplicate_factor_keys():
         ),
     )
     with pytest.raises(ValueError, match="duplicate date/ticker"):
-        MLAlphaModel().fit(factors, target)
+        MLAlphaModel(feature_cols=['f1']).fit(factors, target)
 
 
 def test_regularization_strength():
@@ -435,11 +439,11 @@ def test_regularization_strength():
     )
     
     # Low regularization
-    model_low = MLAlphaModel(model_type="ridge", alpha=0.01)
+    model_low = MLAlphaModel(feature_cols=['f1', 'f2'], model_type="ridge", alpha=0.01)
     model_low.fit(data, returns)
     
     # High regularization
-    model_high = MLAlphaModel(model_type="ridge", alpha=10.0)
+    model_high = MLAlphaModel(feature_cols=['f1', 'f2'], model_type="ridge", alpha=10.0)
     model_high.fit(data, returns)
     
     # High regularization should have smaller coefficients
@@ -473,7 +477,7 @@ def test_lasso_feature_selection():
     )
     
     # Lasso with strong regularization
-    model = MLAlphaModel(model_type="lasso", alpha=0.1)
+    model = MLAlphaModel(feature_cols=['f1', 'f2', 'f3'], model_type="lasso", alpha=0.1)
     model.fit(data, returns)
     
     # Some coefficients should be exactly zero

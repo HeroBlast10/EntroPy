@@ -21,3 +21,14 @@ def is_metadata(name: str) -> bool:
     key = name.lower()
     return (key in RESERVED or key.startswith(("label_", "source_", "pit_", "membership_"))
             or key.endswith(("_is_point_in_time", "_available_date", "_vintage", "_source")))
+
+
+def prediction_columns(frame, requested=None):
+    columns = list(requested) if requested is not None else [c for c in frame if c in BUILTIN_FEATURES]
+    if any(is_metadata(c) for c in columns):
+        raise ValueError("Identifiers/provenance cannot be prediction features")
+    if not columns:
+        raise ValueError("No declared prediction features; supply an explicit feature_cols whitelist")
+    if missing := set(columns) - set(frame):
+        raise ValueError(f"Missing features: {sorted(missing)}")
+    return columns

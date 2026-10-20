@@ -10,7 +10,7 @@ EntroPy tests whether state-space, regime, entropy, mean-reversion, and classic 
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-462%20passed-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-465%20passed-brightgreen.svg)](#testing)
 [![Factors](https://img.shields.io/badge/factors-42%20registered-orange.svg)](#signal-library)
 
 </div>

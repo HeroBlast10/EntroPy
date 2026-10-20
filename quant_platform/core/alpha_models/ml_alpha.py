@@ -237,12 +237,14 @@ class MLAlphaModel:
         l1_ratio: float = 0.5,
         lookback: int = 252,
         refit_freq: int = 21,
+        feature_cols: Optional[List[str]] = None,
     ):
         self.model_type = model_type.lower()
         self.alpha = alpha
         self.l1_ratio = l1_ratio
         self.lookback = lookback
         self.refit_freq = refit_freq
+        self.declared_features = list(feature_cols) if feature_cols is not None else None
         
         # Model and scaler
         self.model_ = None
@@ -307,11 +309,8 @@ class MLAlphaModel:
             logger.warning("No valid training data after alignment")
             return self
         
-        # Get feature columns (exclude date, ticker, forward_return)
-        feature_cols = [
-            c for c in factors.columns
-            if c not in ("date", "ticker", "forward_return")
-        ]
+        from .feature_schema import prediction_columns
+        feature_cols = prediction_columns(factors, self.declared_features)
         factors = _apply_effective_ml_features(factors, feature_cols)
         factors = factors.dropna(subset=feature_cols)
         if len(factors) == 0:
@@ -323,7 +322,7 @@ class MLAlphaModel:
         factors["date"] = pd.to_datetime(factors["date"])
         
         # Sort by date
-        factors = factors.sort_values("date")
+        factors = factors.sort_values(["date", *feature_cols, "forward_return"], kind="mergesort")
         if dates is not None:
             requested_dates = pd.DatetimeIndex(pd.to_datetime(dates))
             factors = factors[factors["date"].isin(requested_dates)]
@@ -463,10 +462,8 @@ class MLAlphaModel:
         factors = _align_factors_and_returns(factors, forward_returns)
         factors = factors.dropna(subset=["forward_return"])
         
-        feature_cols = [
-            c for c in factors.columns
-            if c not in ("date", "ticker", "forward_return")
-        ]
+        from .feature_schema import prediction_columns
+        feature_cols = prediction_columns(factors, self.declared_features)
         factors = _apply_effective_ml_features(factors, feature_cols)
         factors = factors.dropna(subset=feature_cols)
         
@@ -564,6 +561,7 @@ class WalkForwardMLAlpha:
         min_train_periods: int = 252,
         horizon: int = 1,
         purge_days: Optional[int] = None,
+        feature_cols: Optional[List[str]] = None,
     ):
         if refit_freq <= 0 or min_train_periods <= 0:
             raise ValueError("refit_freq and min_train_periods must be positive")
@@ -577,6 +575,7 @@ class WalkForwardMLAlpha:
         self.min_train_periods = min_train_periods
         self.horizon = horizon
         self.purge_days = horizon if purge_days is None else purge_days
+        self.declared_features = list(feature_cols) if feature_cols is not None else None
         
         self.models_: Dict[pd.Timestamp, MLAlphaModel] = {}
         self.feature_importance_history_: List[pd.Series] = []
@@ -643,6 +642,7 @@ class WalkForwardMLAlpha:
                     model_type=self.model_type,
                     alpha=self.alpha,
                     lookback=len(train_dates),
+                    feature_cols=self.declared_features,
                 )
                 current_model.fit(train_data, train_returns)
                 if current_model.model_ is None:

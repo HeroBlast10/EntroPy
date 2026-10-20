@@ -10,7 +10,7 @@ EntroPy 用于检验状态空间、市场状态、熵、均值回复与传统横
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-462%20passed-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-465%20passed-brightgreen.svg)](#测试)
 [![Factors](https://img.shields.io/badge/factors-42个注册因子-orange.svg)](#因子库)
 
 </div>

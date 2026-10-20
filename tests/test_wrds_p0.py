@@ -132,6 +132,29 @@ def test_feature_whitelist_rejects_identifiers_and_provenance_even_when_explicit
         select_usable_features(frame, ["MOM_1M", forbidden])
 
 
+@pytest.mark.parametrize("kind", ["ridge", "lasso", "elastic_net"])
+def test_linear_ml_fit_and_cross_validation_share_explicit_feature_contract(kind):
+    from quant_platform.core.alpha_models.ml_alpha import MLAlphaModel
+    dates = pd.bdate_range("2024-01-02", periods=12)
+    f = pd.MultiIndex.from_product([dates, range(1, 6)], names=["date", "permno"]).to_frame(index=False)
+    f["ticker"] = "PERMNO:" + f.permno.astype(str)
+    f["MOM_1M"] = np.random.default_rng(10).normal(size=len(f))
+    f["source_revision"], f["fundamentals_is_point_in_time"] = f.permno * 100, True
+    target = pd.Series(f.MOM_1M.to_numpy() * .1, index=pd.MultiIndex.from_frame(f[["date", "ticker"]]))
+    m = MLAlphaModel(model_type=kind, alpha=.001).fit(f, target)
+    assert m.feature_names_ == ["MOM_1M"]
+    original = m.predict(f)
+    changed = f.assign(permno=100-f.permno, source_revision=100000-f.source_revision)
+    # The economic sample and display keys stay fixed; identifiers change.
+    m2 = MLAlphaModel(model_type=kind, alpha=.001).fit(changed, target)
+    np.testing.assert_allclose(original, m2.predict(changed), atol=1e-12)
+    bad = MLAlphaModel(feature_cols=["MOM_1M", "permno"])
+    with pytest.raises(ValueError, match="Identifiers/provenance"):
+        bad.fit(f, target)
+    with pytest.raises(ValueError, match="Identifiers/provenance"):
+        bad.cross_validate(f, target)
+
+
 @pytest.mark.parametrize("row_cap", [None, 300])
 @pytest.mark.parametrize("model", ["lightgbm", "mlp"])
 def test_permno_renumbering_preserves_corresponding_predictions(row_cap, model):
