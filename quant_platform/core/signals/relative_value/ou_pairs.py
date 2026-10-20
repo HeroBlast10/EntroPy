@@ -114,6 +114,8 @@ def _rolling_ou_params(
 
     for i in range(window - 1, n):
         chunk = spread[i - window + 1 : i + 1]
+        if not np.isfinite(chunk).all():
+            continue
         th, m, s, hl = _ou_mle_fast(chunk, dt)
         theta_arr[i] = th
         mu_arr[i] = m
@@ -122,8 +124,6 @@ def _rolling_ou_params(
         if s > 1e-10 and th > 0:
             eq_std = s / np.sqrt(2.0 * th)
             zs_arr[i] = (spread[i] - m) / eq_std
-        else:
-            zs_arr[i] = 0.0
 
     return theta_arr, mu_arr, sigma_arr, hl_arr, zs_arr
 
@@ -221,9 +221,9 @@ class OUZScore(FactorBase):
     """Rolling OU z-score: deviation from equilibrium in stationary std units.
 
     Positive z-score ⇒ spread is above equilibrium (sell the spread);
-    negative ⇒ below equilibrium (buy the spread).  ``direction=+1``
-    because higher absolute deviation means stronger mean-reversion
-    opportunity, but the sign carries the trade direction.
+    negative ⇒ below equilibrium (buy the stock). ``direction=-1`` maps
+    this signed deviation to a higher-is-better mean-reversion alpha.
+    Windows without an admissible stationary OU fit remain missing.
     """
 
     meta = FactorMeta(
@@ -233,7 +233,7 @@ class OUZScore(FactorBase):
         description="OU process z-score: deviation from equilibrium in stationary std units",
         lookback=61,
         lag=1,
-        direction=1,
+        direction=-1,
     )
 
     def _compute(

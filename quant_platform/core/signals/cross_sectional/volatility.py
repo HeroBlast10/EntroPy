@@ -242,7 +242,8 @@ class IdioVol(FactorBase):
             mkt = mkt.reindex(df["date"]).reset_index(drop=True)
             df["mkt_ret"] = mkt.values
         else:
-            mkt = df.groupby("date")["ret"].mean().rename("mkt_ret")
+            market_returns = df["ret"].where(df["risk_eligible"].eq(True)) if "risk_eligible" in df else df["ret"]
+            mkt = market_returns.groupby(df["date"]).mean().rename("mkt_ret")
             df = df.merge(mkt, on="date", how="left")
 
         # Fast vectorized computation using Numba

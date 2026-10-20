@@ -13,6 +13,7 @@ import pandas as pd
 from numba import njit
 
 from quant_platform.core.signals.base import FactorBase, FactorMeta
+from quant_platform.core.data.returns import trailing_total_return
 
 
 # ===================================================================
@@ -167,16 +168,15 @@ def _per_ticker_rolling(prices: pd.DataFrame, kernel, window: int, **kwargs) -> 
     """Apply a rolling Numba kernel to daily returns for each ticker."""
     df = prices.sort_values(["ticker", "date"]).copy()
     result = np.full(len(df), np.nan)
+    daily = trailing_total_return(df)
 
     offset = 0
     for _ticker, grp in df.groupby("ticker", sort=False):
         n = len(grp)
-        adj = grp["adj_close"].values.astype(np.float64)
-        rets = np.empty(n)
-        rets[0] = 0.0
-        for j in range(1, n):
-            rets[j] = adj[j] / adj[j - 1] - 1.0 if adj[j - 1] != 0.0 else 0.0
+        rets = daily.loc[grp.index].to_numpy(dtype=np.float64)
         vals = kernel(rets, window, **kwargs)
+        complete = pd.Series(np.isfinite(rets)).rolling(window).sum().eq(window).to_numpy()
+        vals[~complete] = np.nan
         result[offset:offset + n] = vals
         offset += n
 

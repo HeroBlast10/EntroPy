@@ -60,7 +60,7 @@ class Turnover20D(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = prices["volume"].astype(float)
+        vol = df["volume"].astype(float)
         # Relative turnover: volume / trailing 60-day median volume
         if _feature_cache is not None:
             median_vol = _feature_cache.get("volume_median_60")
@@ -87,7 +87,7 @@ class Turnover60D(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = prices["volume"].astype(float)
+        vol = df["volume"].astype(float)
         if _feature_cache is not None:
             median_vol = _feature_cache.get("volume_median_120")
         else:
@@ -150,7 +150,7 @@ class VolumeCV(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = prices["volume"].astype(float)
+        vol = df["volume"].astype(float)
 
         def _cv(s: pd.Series) -> pd.Series:
             mu = s.rolling(60, min_periods=40).mean()
@@ -223,7 +223,7 @@ class TurnoverAccel(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = prices["volume"].astype(float)
+        vol = df["volume"].astype(float)
         if _feature_cache is not None:
             ma20 = _feature_cache.get("volume_mean_20")
             ma60 = _feature_cache.get("volume_mean_60")
@@ -252,7 +252,7 @@ class AbnormalVolume(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None, _feature_cache=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        vol = prices["volume"].astype(float)
+        vol = df["volume"].astype(float)
         if _feature_cache is not None:
             mu = _feature_cache.get("volume_mean_60")
             sigma = _feature_cache.get("volume_std_60")
@@ -286,6 +286,12 @@ class SpreadHL(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"]).copy()
+        if {"adj_close", "close"} <= set(df):
+            # Both days of the two-session range need comparable units.
+            # CIZ raw OHLC changes units on a split while its TR index does not.
+            scale = df.adj_close / df.close.where(df.close.gt(0))
+            df["high"] *= scale
+            df["low"] *= scale
         # β = ln(H_t/L_t)^2 — single-day range
         log_hl = np.log(df["high"] / df["low"].replace(0, np.nan))
         beta = log_hl ** 2
@@ -318,6 +324,33 @@ class SpreadHL(FactorBase):
         )
 
 
+class ShareTurnover20D(FactorBase):
+    """Actual daily share turnover, distinct from legacy relative volume.
+
+    Both volume and shares outstanding are same-day as-traded share units;
+    a proportional split therefore leaves turnover unchanged.
+    """
+    meta = FactorMeta(name="SHARE_TURNOVER_20D", category="liquidity",
+                      description="20-session mean volume/shares outstanding", lookback=21, lag=1, direction=-1)
+    window = 20
+
+    def _compute(self, prices, fundamentals=None):
+        df = prices.sort_values(["ticker", "date"])
+        if "shares_outstanding" not in df:
+            return pd.Series(np.nan, index=df.index)
+        value = df.volume / df.shares_outstanding.where(df.shares_outstanding.gt(0))
+        if "is_tradable" in df:
+            value = value.where(df.is_tradable.eq(True))
+        return value.groupby(df.ticker).transform(
+            lambda s: s.rolling(self.window, min_periods=max(5, self.window // 2)).mean())
+
+
+class ShareTurnover60D(ShareTurnover20D):
+    meta = FactorMeta(name="SHARE_TURNOVER_60D", category="liquidity",
+                      description="60-session mean volume/shares outstanding", lookback=61, lag=1, direction=-1)
+    window = 60
+
+
 # ===================================================================
 # Convenience list
 # ===================================================================
@@ -331,4 +364,6 @@ ALL_LIQUIDITY_FACTORS = [
     TurnoverAccel,
     AbnormalVolume,
     SpreadHL,
+    ShareTurnover20D,
+    ShareTurnover60D,
 ]

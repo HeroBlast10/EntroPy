@@ -13,6 +13,7 @@ import pandas as pd
 from numba import njit
 
 from quant_platform.core.signals.base import FactorBase, FactorMeta
+from quant_platform.core.data.returns import trailing_total_return
 
 
 # ===================================================================
@@ -32,8 +33,22 @@ def _rolling_spectral_entropy(returns, window):
     out = np.empty(n)
     out[:window - 1] = np.nan
 
+    # The basis is constant across windows. Avoid billions of repeated
+    # trigonometric calls on a CRSP panel without changing the periodogram.
+    half = window // 2
+    cosine = np.empty((half, window))
+    sine = np.empty((half, window))
+    for k in range(half):
+        for t in range(window):
+            angle = 2.0 * np.pi * k * t / window
+            cosine[k, t] = np.cos(angle)
+            sine[k, t] = np.sin(angle)
+
     for i in range(window - 1, n):
         seg = returns[i - window + 1:i + 1]
+        if not np.isfinite(seg).all():
+            out[i] = np.nan
+            continue
 
         # Manual DFT (Numba-safe — no np.fft)
         N = len(seg)
@@ -43,9 +58,8 @@ def _rolling_spectral_entropy(returns, window):
             re = 0.0
             im = 0.0
             for t in range(N):
-                angle = 2.0 * np.pi * k * t / N
-                re += seg[t] * np.cos(angle)
-                im -= seg[t] * np.sin(angle)
+                re += seg[t] * cosine[k, t]
+                im -= seg[t] * sine[k, t]
             psd[k] = re * re + im * im
 
         # Normalise to probability distribution
@@ -161,16 +175,15 @@ def _per_ticker_rolling(prices: pd.DataFrame, kernel, window: int) -> pd.Series:
     """Apply a rolling Numba kernel to daily returns for each ticker."""
     df = prices.sort_values(["ticker", "date"]).copy()
     result = np.full(len(df), np.nan)
+    daily = trailing_total_return(df)
 
     offset = 0
     for _ticker, grp in df.groupby("ticker", sort=False):
         n = len(grp)
-        adj = grp["adj_close"].values.astype(np.float64)
-        rets = np.empty(n)
-        rets[0] = 0.0
-        for j in range(1, n):
-            rets[j] = adj[j] / adj[j - 1] - 1.0 if adj[j - 1] != 0.0 else 0.0
+        rets = daily.loc[grp.index].to_numpy(dtype=np.float64)
         vals = kernel(rets, window)
+        complete = pd.Series(np.isfinite(rets)).rolling(window).sum().eq(window).to_numpy()
+        vals[~complete] = np.nan
         result[offset:offset + n] = vals
         offset += n
 

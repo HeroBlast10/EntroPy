@@ -23,6 +23,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from numba import njit
 
 from quant_platform.core.signals.base import FactorBase, FactorMeta
 from quant_platform.core.data.returns import trailing_total_return
@@ -37,11 +38,24 @@ def _pct_return(series: pd.Series, period: int) -> pd.Series:
     return series.pct_change(periods=period, fill_method=None)
 
 
+@njit(cache=True)
+def _drawdown_kernel(values, window):
+    out = np.full(len(values), np.nan)
+    for i in range(window - 1, len(values)):
+        chunk = values[i-window+1:i+1]
+        if not np.isfinite(chunk).all() or np.min(chunk) <= 0:
+            continue
+        peak, worst = chunk[0], 0.0
+        for value in chunk:
+            peak = max(peak, value)
+            worst = min(worst, value / peak - 1)
+        out[i] = worst
+    return out
+
+
 def _rolling_max_drawdown(series: pd.Series, window: int) -> pd.Series:
-    """Rolling max drawdown over *window* rows."""
-    rolling_max = series.rolling(window, min_periods=window).max()
-    drawdown = series / rolling_max - 1.0
-    return drawdown.rolling(window, min_periods=window).min()
+    """Maximum peak-to-trough loss entirely INSIDE each trailing window."""
+    return pd.Series(_drawdown_kernel(series.to_numpy(dtype=float), window), index=series.index)
 
 
 # ===================================================================
@@ -204,13 +218,10 @@ class MomPath(FactorBase):
         window = int(self._extra_params.get("window", self._DEFAULT_WINDOW))
         df = prices.sort_values(["ticker", "date"])
 
-        def _path(s: pd.Series) -> pd.Series:
-            ret = s.pct_change(periods=window, fill_method=None)
-            mdd = _rolling_max_drawdown(s, window).abs()
-            mdd = mdd.replace(0, np.nan)
-            return ret / mdd
-
-        return df.groupby("ticker")["adj_close"].transform(_path)
+        ret = trailing_total_return(df, window)
+        mdd = df.groupby("ticker")["adj_close"].transform(
+            lambda s: _rolling_max_drawdown(s, window + 1)).abs().replace(0, np.nan)
+        return ret / mdd
 
 
 # ===================================================================
@@ -316,12 +327,15 @@ class ResidualMomentum(FactorBase):
             df.pivot_table(index="date", columns="ticker", values="ret", aggfunc="first")
             .sort_index()
         )
+        if "risk_eligible" in df:
+            mask = df.pivot(index="date", columns="ticker", values="risk_eligible").reindex_like(ret_wide).eq(True)
+            ret_wide = ret_wide.where(mask)
         market = ret_wide.mean(axis=1)
         market.name = "mkt"
 
         if "market_cap" in df.columns and df["market_cap"].notna().any():
             mcap_wide = (
-                df.pivot_table(index="date", columns="ticker", values="market_cap", aggfunc="first")
+                df.pivot_table(index="date", columns="ticker", values="market_cap", aggfunc="first").shift(1)
                 .reindex_like(ret_wide)
             )
             # Top vs bottom quartile size return per date

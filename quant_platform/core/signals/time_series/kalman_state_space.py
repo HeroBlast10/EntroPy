@@ -31,12 +31,21 @@ def _kalman_filter_1d(prices, q00, q01, q10, q11, r, a00, a01, a10, a11, h0, h1)
     velocity = np.empty(n)
     kg = np.empty(n)
 
-    x0 = prices[0]
+    x0 = 0.0
+    initialized = False
     x1 = 0.0
     p00 = 1.0; p01 = 0.0; p10 = 0.0; p11 = 1.0
 
     for i in range(n):
         z = prices[i]
+        if not initialized:
+            if not np.isfinite(z):
+                filtered[i] = np.nan
+                velocity[i] = np.nan
+                kg[i] = np.nan
+                continue
+            x0 = z
+            initialized = True
 
         # Predict state
         xp0 = a00 * x0 + a01 * x1
@@ -47,6 +56,13 @@ def _kalman_filter_1d(prices, q00, q01, q10, q11, r, a00, a01, a10, a11, h0, h1)
         t10 = a10 * p00 + a11 * p10; t11 = a10 * p01 + a11 * p11
         pp00 = t00 * a00 + t01 * a01 + q00; pp01 = t00 * a10 + t01 * a11 + q01
         pp10 = t10 * a00 + t11 * a01 + q10; pp11 = t10 * a10 + t11 * a11 + q11
+
+        if not np.isfinite(z):
+            # Advance uncertainty without manufacturing an observed quote.
+            x0 = xp0; x1 = xp1
+            p00 = pp00; p01 = pp01; p10 = pp10; p11 = pp11
+            filtered[i] = np.nan; velocity[i] = np.nan; kg[i] = np.nan
+            continue
 
         # Innovation covariance: S = H @ P_pred @ H^T + R
         hp0 = h0 * pp00 + h1 * pp10; hp1 = h0 * pp01 + h1 * pp11

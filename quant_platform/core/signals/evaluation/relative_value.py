@@ -104,14 +104,14 @@ class RelativeValueScorecard:
                 
                 # Entry logic
                 if position == 0:
-                    if prev_z < -2:  # Oversold, go long
+                    if prev_z > 2:  # Positive oriented alpha, go long
                         position = 1
-                    elif prev_z > 2:  # Overbought, go short
+                    elif prev_z < -2:  # Negative oriented alpha, go short
                         position = -1
                 
                 # Exit logic
                 if position != 0:
-                    if (position == 1 and curr_z > 0) or (position == -1 and curr_z < 0):
+                    if (position == 1 and curr_z < 0) or (position == -1 and curr_z > 0):
                         # Exit and record trade return
                         trade_returns.append(position * ret)
                         position = 0

@@ -63,6 +63,8 @@ WRDS_CODE_PATHS = (
     "scripts/verify_wrds_research.py", "scripts/rebuild_wrds_p0.py", "scripts/verify_wrds_p0.py",
     "scripts/evaluate_nonlinear_alpha.py", "scripts/evaluate_alpha_after_costs.py",
     "scripts/reproduce_all.py", "config/wrds_research.yaml", "config/settings.yaml",
+    "scripts/build_wrds_factor_library.py", "scripts/diagnose_wrds_factors.py",
+    "scripts/compare_wrds_models.py", "scripts/verify_wrds_batch2.py", "config/wrds_batch2.yaml",
     "pyproject.toml", "requirements.txt",
 )
 

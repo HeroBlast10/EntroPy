@@ -99,6 +99,8 @@ class PriceFeatureCache:
         # --- Market return (equal-weighted) ---
         if name == "market_ret":
             ret_1d = self.get("ret_1d")
+            if "risk_eligible" in self.prices:
+                ret_1d = ret_1d.where(self.prices["risk_eligible"].eq(True))
             return ret_1d.groupby(self.prices["date"]).mean()
         
         # --- Volatility ---
@@ -113,20 +115,23 @@ class PriceFeatureCache:
         # --- Volume metrics ---
         if name.startswith("volume_mean_"):
             window = int(name.split("_")[-1])
+            minimum = {20: 15, 60: 40}.get(window, max(1, window // 2))
             return self._grouped["volume"].transform(
-                lambda x: x.rolling(window, min_periods=max(1, window // 2)).mean()
+                lambda x: x.rolling(window, min_periods=minimum).mean()
             )
         
         if name.startswith("volume_std_"):
             window = int(name.split("_")[-1])
+            minimum = {60: 40}.get(window, max(1, window // 2))
             return self._grouped["volume"].transform(
-                lambda x: x.rolling(window, min_periods=max(1, window // 2)).std()
+                lambda x: x.rolling(window, min_periods=minimum).std()
             )
         
         if name.startswith("volume_median_"):
             window = int(name.split("_")[-1])
+            minimum = {60: 20, 120: 40}.get(window, max(1, window // 2))
             return self._grouped["volume"].transform(
-                lambda x: x.rolling(window, min_periods=max(1, window // 2)).median()
+                lambda x: x.rolling(window, min_periods=minimum).median()
             )
         
         # --- High/Low extremes ---

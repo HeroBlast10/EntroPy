@@ -1,0 +1,47 @@
+date_range: {start: '2010-01-01', end: '2025-12-31'}
+paths:
+  factors: data/wrds/batch2/factors.parquet
+  catalog: data/wrds/batch2/factor_catalog.csv
+  prices: data/wrds/p0/prices.parquet
+  universe: data/wrds/p0/universe.parquet
+  output: data/wrds/batch2/model_comparison
+feature_whitelist:
+  [MOM_1M, MOM_3M, MOM_6M, MOM_12_1M, STR_1W, STR_1M, MOM_PATH, RESID_MOM_12_1M,
+   OVERNIGHT_RET_21D, VOL_20D, VOL_60D, IDIOVOL, SKEW_60D, KURT_60D, DOWNVOL_60D,
+   TAIL_RISK, VOL_OF_VOL, REALIZED_JUMP, TURNOVER_20D, TURNOVER_60D, ILLIQ_AMIHUD,
+   VOLUME_CV, PRICE_IMPACT, TURNOVER_ACCEL, ABNORMAL_VOLUME, SPREAD_HL,
+   SHARE_TURNOVER_20D, SHARE_TURNOVER_60D, EARNINGS_YIELD, BOOK_TO_MARKET,
+   GROSS_PROFITABILITY, ASSET_GROWTH, ACCRUALS, PIOTROSKI_F8, KF_VELOCITY,
+   KF_TREND_STRENGTH, KF_NOISE_RATIO, SPECTRAL_ENTROPY_60D, HURST_60D,
+   ROLLING_SKEW_60D, ROLLING_KURT_60D, ACF_DECAY_60D, HMM_TURBULENCE_PROB, OU_ZSCORE]
+data_contract:
+  primary_key: permno
+  require_pit_membership: true
+  allow_restated_fundamentals: false
+  missing_terminal_return: raise
+  require_frozen_code: true
+research:
+  primary_horizon: 20
+  robustness_horizon: 5
+  min_train_days: 756
+  validation_days: 252
+  n_splits: 4
+  inner_days: 126
+  max_train_rows: 200000
+  min_feature_coverage: 0.80
+  n_jobs: 4
+  seeds: [17, 43, 101]
+  max_candidate_configurations: 12
+  model_configs:
+    ridge: [{alpha: 10}, {alpha: 100}]
+    lightgbm:
+      - {num_leaves: 7, max_depth: 3, min_child_samples: 1000, reg_lambda: 20, n_estimators: 80}
+      - {num_leaves: 15, max_depth: 4, min_child_samples: 1000, reg_lambda: 40, n_estimators: 80}
+execution:
+  initial_capital: 1000000
+  gross_target: 1
+  max_stock_weight: 0.015
+  max_issuer_gross_weight: 0.03
+  max_participation_rate: 0.10
+  min_names: 100
+  cost_stress_multiplier: 2

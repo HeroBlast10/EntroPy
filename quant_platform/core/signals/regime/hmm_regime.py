@@ -394,7 +394,8 @@ class HMMTurbulenceProbability(FactorBase):
         fundamentals: Optional[pd.DataFrame] = None,
     ) -> pd.Series:
         df = prices.sort_values(["ticker", "date"]).copy()
-        df["ret"] = df.groupby("ticker")["adj_close"].pct_change(fill_method=None)
+        from quant_platform.core.data.returns import trailing_total_return
+        df["ret"] = trailing_total_return(df)
 
         min_history = int(self._extra_params.get("min_history", self._meta.lookback))
         train_window = int(
