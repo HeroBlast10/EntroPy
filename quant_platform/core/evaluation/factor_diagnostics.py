@@ -86,7 +86,7 @@ def factor_diagnostics(panel, catalog, horizons=(1,5,20,60)):
     names = catalog.factor.tolist()
     rank_frame = work[names].groupby(dates).rank(pct=True)
     baseline = rank_frame[[c for c in ("MOM_12_1M", "GROSS_PROFITABILITY") if c in rank_frame]]
-    size_rank = work.decision_log_size.groupby(dates).rank(pct=True)
+    size_rank = work.decision_log_size.astype("float64").groupby(dates).rank(pct=True)
     size_groups = pd.Series(np.select([size_rank.le(.3), size_rank.ge(.7)], ["small", "large"], default="middle"),index=work.index)
     market=work.groupby("date").fwd_1.mean().reindex(calendar)
     past_vol=market.rolling(63,min_periods=42).std().shift(2)

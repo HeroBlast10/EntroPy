@@ -232,7 +232,7 @@ def test_uniform_diagnostics_keep_raw_and_adjusted_financial_samples_paired():
     p["MOM_12_1M"]=rng.normal(size=len(p))
     p["GROSS_PROFITABILITY"]=rng.normal(size=len(p))
     p["decision_industry"]="SIC2:"+(p.permno%3).astype(str)
-    p["decision_log_size"]=np.log(p.market_cap)
+    p["decision_log_size"]=np.log(p.market_cap).astype("Float64")
     p["decision_financial_or_real_estate"]=False
     p.loc[p.permno.eq(1),"decision_industry"]=pd.NA
     p["fwd_1"]=p["fwd_20"]=rng.normal(size=len(p))*.01
@@ -244,3 +244,23 @@ def test_uniform_diagnostics_keep_raw_and_adjusted_financial_samples_paired():
     adjusted=summary[summary.variant.eq("industry_size")].set_index("horizon")
     pd.testing.assert_series_equal(matched.labeled_rows,adjusted.labeled_rows)
     assert len(summary)==8
+
+
+def test_real_execution_tables_persist_separately_from_in_memory_ledger(tmp_path):
+    from scripts.compare_wrds_models import execute_book
+    p=prices(40,100).assign(permco=lambda f:f.permno,volume=100000.)
+    p["is_terminal"]=False
+    tape=tmp_path/"prices.parquet";p.to_parquet(tape,index=False)
+    dates=p.date.unique()[-10:]
+    oof=p[p.date.isin(dates)][["date","ticker"]].copy()
+    oof["block"]="price_only"
+    oof["ridge"]=np.random.default_rng(9).normal(size=len(oof))
+    oof.to_parquet(tmp_path/"oof.parquet",index=False)
+    cfg={"initial_capital":1000000,"max_participation_rate":.1,"min_names":20,
+         "max_stock_weight":.015,"max_issuer_gross_weight":.03}
+    result=execute_book(str(tmp_path),"price_only","ridge",str(tape),cfg,5,"total_loss",1)
+    dest=tmp_path/"backtests/price_only/ridge/cost_1x"
+    trades=pd.read_parquet(dest/"trades.parquet")
+    pnl=pd.read_parquet(dest/"daily_pnl.parquet")
+    assert result["executed_trades"]>0 and len(pnl)==10
+    assert "daily_ledger" not in trades.attrs

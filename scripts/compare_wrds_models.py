@@ -61,6 +61,10 @@ def execute_book(folder,block,signal,price_path,execution,horizon,policy,stress)
     dest=folder/"backtests"/block/signal/f"cost_{stress:g}x"
     dest.mkdir(parents=True,exist_ok=True)
     weights.to_parquet(dest/"rebalance_weights.parquet",index=False)
+    # The simulator attaches an in-memory DataFrame ledger to trades.attrs.
+    # Persist it explicitly as daily_pnl, not as JSON-valued parquet metadata.
+    trades.attrs={}
+    pnl.attrs={}
     trades.to_parquet(dest/"trades.parquet",index=False)
     pnl.to_parquet(dest/"daily_pnl.parquet")
     nonrebalance=~trades.is_rebalance_order.eq(True)
