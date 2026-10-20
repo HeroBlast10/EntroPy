@@ -63,12 +63,13 @@ def test_expanding_folds_purge_by_complete_dates() -> None:
 
 def test_feature_selection_and_learning_panel() -> None:
     factors, prices = _synthetic_panel()
-    selected = select_usable_features(factors)
+    selected = select_usable_features(factors, ["predictive", "noise", "constant"])
     assert selected == ["predictive", "noise"]
     panel, features = build_learning_panel(
         factors,
         prices,
         _all_tradable(factors),
+        feature_cols=["predictive", "noise"],
         horizon=1,
         min_cross_section=10,
     )
@@ -232,6 +233,7 @@ def test_feature_selection_rejects_cross_sectionally_constant_columns() -> None:
     frame.loc[frame.index[0], "sparse_anomaly"] = 1.0
     selected, diagnostics = select_usable_features(
         frame,
+        feature_cols=["date_only", "cross_sectional", "sparse_anomaly"],
         return_diagnostics=True,
     )
     assert selected == ["cross_sectional"]
@@ -247,6 +249,7 @@ def test_lightgbm_walk_forward_finds_nonlinear_signal() -> None:
         factors,
         prices,
         _all_tradable(factors),
+        feature_cols=["predictive", "noise"],
         min_cross_section=10,
     )
     config = WalkForwardConfig(
@@ -281,6 +284,7 @@ def test_evaluate_alpha_has_expected_sign() -> None:
         factors,
         prices,
         _all_tradable(factors),
+        feature_cols=["predictive", "noise"],
         min_cross_section=10,
     )
     metrics, daily = evaluate_alpha(panel, "predictive")
@@ -295,6 +299,7 @@ def test_evaluate_alpha_labels_and_scales_overlapping_horizon() -> None:
         factors,
         prices,
         _all_tradable(factors),
+        feature_cols=["predictive", "noise"],
         min_cross_section=10,
     )
     one_day, _ = evaluate_alpha(panel, "predictive", horizon=1)

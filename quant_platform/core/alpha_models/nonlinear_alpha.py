@@ -18,6 +18,9 @@ from typing import Any, Iterable, Iterator, Literal, Optional
 import numpy as np
 import pandas as pd
 
+from .feature_schema import BUILTIN_FEATURES, is_metadata
+from quant_platform.core.data.returns import forward_total_returns
+
 
 ModelKind = Literal["lightgbm", "mlp"]
 
@@ -112,9 +115,14 @@ def select_usable_features(
     if not 0.0 < max_dominant_value_fraction <= 1.0:
         raise ValueError("max_dominant_value_fraction must be in (0, 1]")
 
+    # Custom features require an explicit declaration. Numeric metadata does
+    # not become predictive data just because it passes variance checks.
     candidates = list(feature_cols) if feature_cols is not None else [
-        c for c in factors.columns if c not in {"date", "ticker"}
+        c for c in factors.columns if c in BUILTIN_FEATURES
     ]
+    forbidden = [c for c in candidates if is_metadata(c)]
+    if forbidden:
+        raise ValueError(f"Identifiers/provenance cannot be prediction features: {forbidden}")
     selected: list[str] = []
     diagnostics: list[dict[str, Any]] = []
     for col in candidates:
@@ -275,6 +283,7 @@ def build_learning_panel(
     target_clip: float = 3.0,
     min_cross_section: int = 20,
     min_feature_coverage: float = 0.80,
+    missing_terminal_return: str = "raise",
 ) -> tuple[pd.DataFrame, list[str]]:
     """Build point-in-time ranked features and forward-return labels.
 
@@ -308,9 +317,6 @@ def build_learning_panel(
         min_coverage=min_feature_coverage,
     )
 
-    price_col = "adj_close" if "adj_close" in prices.columns else "close"
-    if price_col not in prices.columns:
-        raise ValueError("prices must contain adj_close or close")
     # Rank features on the complete point-in-time signal universe.  Label
     # availability is future information and must not change contemporaneous
     # feature values for the other securities.
@@ -320,31 +326,11 @@ def build_learning_panel(
     # Define horizon on the shared trading calendar, not as "the next observed
     # row for this ticker".  A suspension or missing quote therefore produces
     # a missing label instead of silently extending the holding period.
-    price_panel = prices[["date", "ticker", price_col]].copy()
-    calendar = pd.DatetimeIndex(price_panel["date"].dropna().unique()).sort_values()
-    calendar_map = pd.DataFrame({
-        "date": calendar,
-        "_label_date": pd.Series(calendar, index=calendar).shift(-horizon).to_numpy(),
-    })
-    price_panel = price_panel.merge(
-        calendar_map,
-        on="date",
-        how="left",
-        validate="many_to_one",
-    )
-    future_prices = prices[["date", "ticker", price_col]].rename(
-        columns={"date": "_label_date", price_col: "_future_price"}
-    )
-    price_panel = price_panel.merge(
-        future_prices,
-        on=["_label_date", "ticker"],
-        how="left",
-        validate="many_to_one",
-    )
-    price_panel["forward_return"] = price_panel["_future_price"] / price_panel[price_col] - 1.0
+    price_panel = forward_total_returns(prices, horizon,
+                                        missing_terminal_return=missing_terminal_return)
 
     panel = ranked_factors.merge(
-        price_panel[["date", "ticker", "forward_return"]],
+        price_panel,
         on=["date", "ticker"],
         how="left",
         validate="one_to_one",
@@ -408,7 +394,7 @@ def _sample_training_rows(indices: np.ndarray, limit: Optional[int], seed: int) 
     if limit is None or len(indices) <= limit:
         return indices
     rng = np.random.default_rng(seed)
-    return np.sort(rng.choice(indices, size=limit, replace=False))
+    return indices[np.sort(rng.choice(len(indices), size=limit, replace=False))]
 
 
 def _fit_predict_lightgbm(
@@ -542,9 +528,13 @@ def _fit_predict_mlp(
 
 
 def _daily_zscore(values: pd.Series, dates: pd.Series) -> pd.Series:
+    # Float32 reductions depend on security ordering at roughly 1e-7.
+    # Use a sorted float64 cross-section so renumbering IDs changes neither
+    # normalization nor the model's corresponding predictions.
+    values = values.astype("float64")
     grouped = values.groupby(dates, sort=False, observed=True)
-    mean = grouped.transform("mean")
-    std = grouped.transform(lambda x: x.std(ddof=0)).replace(0.0, np.nan)
+    mean = grouped.transform(lambda x: np.sort(x.to_numpy()).mean())
+    std = grouped.transform(lambda x: np.sort(x.to_numpy()).std(ddof=0)).replace(0.0, np.nan)
     return ((values - mean) / std).fillna(0.0)
 
 
@@ -561,6 +551,8 @@ def run_walk_forward_oof(
 
     wf = walk_forward or WalkForwardConfig()
     feature_names = list(feature_cols)
+    if any(is_metadata(c) for c in feature_names):
+        raise ValueError("Identifiers/provenance cannot be prediction features")
     missing = set(["date", "ticker", "forward_return", "target", *feature_names]) - set(panel)
     if missing:
         raise ValueError(f"Learning panel is missing columns: {sorted(missing)}")
@@ -577,9 +569,17 @@ def run_walk_forward_oof(
         # Labels are required for fitting only.  Validation rows deliberately
         # remain independent of future-return availability.
         train_mask = train_universe_mask & target_is_valid
+        if "label_end" in panel:
+            train_mask &= pd.to_datetime(panel.label_end).lt(fold["validation_start"]).to_numpy()
         validation_mask = date_values.isin(fold["validation_dates"]).to_numpy()
+        # Bagging and capped sampling depend on row order. Canonicalize using
+        # training observations, never arbitrary security numbering, so an ID
+        # permutation cannot change random samples or fitted predictions.
+        candidates = np.flatnonzero(train_mask)
+        ordering = panel.iloc[candidates][["date", *feature_names, "target"]].reset_index(drop=True)
+        canonical = ordering.sort_values(["date", *feature_names, "target"], kind="mergesort").index
         train_indices = _sample_training_rows(
-            np.flatnonzero(train_mask),
+            candidates[canonical],
             wf.max_train_rows,
             wf.seed + fold["fold"],
         )
@@ -611,7 +611,8 @@ def run_walk_forward_oof(
             )
 
         fold_result = panel.iloc[validation_indices][
-            ["date", "ticker", "forward_return", "target"]
+            ["date", "ticker", "forward_return", "target", *[
+                c for c in ("label_end", "label_terminal_settled", "label_terminal_imputed") if c in panel]]
         ].copy()
         fold_result["prediction_raw"] = prediction
         fold_result["prediction"] = _daily_zscore(

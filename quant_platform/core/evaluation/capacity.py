@@ -59,7 +59,11 @@ def capacity_analysis(
     # Sub-share rounding rejects are not executable order requests. Including
     # their zero-only retry days lets monthly rebalances fall outside p95 and
     # spuriously inflates capacity by orders of magnitude.
-    active = tr.loc[tr["capacity_shares"].gt(0)].copy()
+    all_active = tr.loc[tr["capacity_shares"].gt(0)].copy()
+    # Demand is sampled at original rebalances. Even positive whole-share
+    # retries must not turn a monthly strategy into a daily low-demand sample.
+    active = (all_active.loc[all_active["is_rebalance_order"].eq(True)].copy()
+              if "is_rebalance_order" in all_active else all_active)
     daily_requested = active.groupby("date")["requested_participation"].max()
     p95_requested = float(daily_requested.quantile(0.95))
     daily_participation = active.groupby("date")["executed_participation"].max()
@@ -68,6 +72,8 @@ def capacity_analysis(
     # 95% of daily worst requested orders fit inside 10% ADV.
     nav_scale = base_capital / active["portfolio_value_before_trade"].where(active["portfolio_value_before_trade"].gt(0)).fillna(base_capital)
     normalized_daily = (active["requested_participation"] * nav_scale).groupby(active["date"]).max()
+    all_nav_scale = base_capital / all_active["portfolio_value_before_trade"].where(all_active["portfolio_value_before_trade"].gt(0)).fillna(base_capital)
+    normalized_all = (all_active["requested_participation"] * all_nav_scale).groupby(all_active["date"]).max()
     normalized_p95 = normalized_daily.quantile(0.95)
     capacity_10pct_adv = (
         base_capital * 0.10 / normalized_p95
@@ -86,9 +92,11 @@ def capacity_analysis(
         "p95_executed_participation": p95_participation,
         "max_executed_participation": float(tr["executed_participation"].max()),
         "p95_aggregation": "95th percentile of daily maximum",
-        "p95_sample": "dates with at least one positive whole-share request; excludes zero-only rounding retries",
+        "p95_sample": ("original rebalance requests only; residual retries excluded"
+                       if "is_rebalance_order" in tr else "positive whole-share requests; rebalance provenance unavailable"),
+        "p95_sample_days": int(active["date"].nunique()),
         "capacity_basis": "requested orders, normalized to initial capital; not a full strategy replay",
-        "capacity_at_max_10pct_adv": float(base_capital * 0.10 / normalized_daily.max()) if normalized_daily.max() > 0 else np.nan,
+        "capacity_at_max_10pct_adv": float(base_capital * 0.10 / normalized_all.max()) if normalized_all.max() > 0 else np.nan,
         "capacity_liquidity_coverage": float(tr.loc[tr["capacity_notional"].gt(0), "adv_shares"].notna().mean()),
         "avg_adv_notional_pct": float(tr["adv_notional_pct"].mean()),
         "p95_adv_notional_pct": float(active.groupby("date")["adv_notional_pct"].max().quantile(0.95)),

@@ -11,6 +11,7 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 from loguru import logger
+from quant_platform.core.data.returns import trailing_total_return
 
 
 class PriceFeatureCache:
@@ -77,11 +78,11 @@ class PriceFeatureCache:
         
         # --- Returns ---
         if name == "ret_1d":
-            return self._grouped["adj_close"].pct_change()
+            return trailing_total_return(self.prices)
         
         if name.startswith("ret_") and name.endswith("d"):
             periods = int(name.split("_")[1][:-1])
-            return self._grouped["adj_close"].pct_change(periods)
+            return trailing_total_return(self.prices, periods)
         
         # --- Absolute returns ---
         if name == "abs_ret":

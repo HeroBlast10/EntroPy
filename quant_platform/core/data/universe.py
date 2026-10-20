@@ -106,7 +106,9 @@ def require_point_in_time_universe(
         raise ValueError(
             f"{context} requires universe PIT provenance; missing {sorted(missing)}"
         )
-    status = universe["membership_is_point_in_time"].fillna(False).astype(bool)
+    if universe.empty:
+        raise ValueError(f"{context} requires non-empty PIT universe")
+    status = universe["membership_is_point_in_time"].eq(True)
     if not status.all():
         sources = sorted(
             universe.loc[~status, "membership_source"]

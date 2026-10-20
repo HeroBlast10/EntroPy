@@ -36,7 +36,7 @@ from scripts.wrds_ingest.client import (
 )
 
 DEFAULT_START = "2009-01-01"   # one year of warm-up before the 2010 universe start
-DEFAULT_END = "2026-07-21"
+DEFAULT_END = "2025-12-31"
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ def pull_membership(
     start: str = DEFAULT_START,
     end: str = DEFAULT_END,
 ) -> pd.DataFrame:
-    """Historical index membership as (permno, start, end] half-open intervals.
+    """Historical index membership with inclusive start and end dates.
 
     Overlapping rows are merged, because CRSP records re-entries as separate
     rows and a naive downstream join would either duplicate a security or drop
@@ -95,6 +95,10 @@ def pull_membership(
     # An open-ended interval means "still a member as of the tape date".
     frame["is_current_member"] = frame["membership_end"].isna()
     merged = _merge_intervals(frame.sort_values(["permno", "membership_start"]))
+    merged["membership_asof"] = pd.Timestamp(end)
+    merged["member_at_asof"] = merged["membership_start"].le(pd.Timestamp(end)) & (
+        merged["membership_end"].isna() | merged["membership_end"].ge(pd.Timestamp(end)))
+    merged["right_censored"] = merged["membership_end"].eq(pd.Timestamp(end))
     return merged
 
 
@@ -103,7 +107,7 @@ def _merge_intervals(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
     out: list[dict[str, Any]] = []
-    for permno, grp in frame.groupby("permno", sort=True):
+    for permno, grp in frame.sort_values(["permno", "membership_start"]).groupby("permno", sort=True):
         start = grp["membership_start"].to_numpy()
         end = grp["membership_end"].to_numpy()
         cur_start = start[0]
@@ -113,7 +117,7 @@ def _merge_intervals(frame: pd.DataFrame) -> pd.DataFrame:
             # Touching or overlapping if the next start <= current end + 1 day.
             gap_ok = pd.isna(cur_end) or start[i] <= cur_end + pd.Timedelta(days=1)
             if gap_ok:
-                cur_end = end[i] if not (pd.isna(cur_end) or pd.isna(end[i])) else None
+                cur_end = max(cur_end, end[i]) if not (pd.isna(cur_end) or pd.isna(end[i])) else None
                 current = current or bool(grp["is_current_member"].iloc[i])
             else:
                 out.append(
@@ -231,7 +235,7 @@ def attach_ticker(
     # the real universe, which is the worst possible place to find out.
     # A bounded interval filter is exact, order-independent, and cheap here
     # because each PERMNO has only a handful of name rows.
-    left = targets[[permno_col, date_col]].copy()
+    left = targets.copy()
     left[date_col] = pd.to_datetime(left[date_col])
     left["_row"] = range(len(left))
 
@@ -246,8 +250,7 @@ def attach_ticker(
         # Two name rows can overlap after an acquisition; take the most recent.
         matched = (
             matched.sort_values(["_row", "effective_from"])
-            .groupby("_row", as_index=False)
-            .last()
+            .drop_duplicates("_row", keep="last")
         )
         left = left.merge(
             matched[["_row"] + [c for c in names.columns if c != permno_col]],
@@ -305,7 +308,7 @@ def audit_ticker_ambiguity(names: pd.DataFrame) -> dict[str, Any]:
         "n_tickers_bound_to_multiple_permnos": int(len(reused)),
         "n_permnos_with_multiple_tickers": int(len(renamed)),
         "n_simultaneous_ticker_collisions": int(
-            len({(o["ticker"], o["permno_a"], o["permno_b"]) for o in overlapping})
+            len({(o["ticker"], *sorted((o["permno_a"], o["permno_b"]))) for o in overlapping})
         ),
         "examples_simultaneous_collisions": overlapping[:10],
         "verdict": (
@@ -403,6 +406,11 @@ def _price_select_plan(plan: SourcePlan) -> tuple[list[str], dict[str, str]]:
         if column:
             exprs.append(f"{column} AS {alias}")
             picked[role] = alias
+    for column in ("dlyfacprc", "dlycumfacpr", "dlycumfacshr", "securitytype",
+                   "securitysubtype", "sharetype", "usincflg", "issuertype",
+                   "primaryexch", "conditionaltype", "tradingstatusflg"):
+        if column in (plan.get("daily_columns_raw") or []):
+            exprs.append(column)
     return exprs, picked
 
 
@@ -451,6 +459,27 @@ def pull_prices(
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
     return out.sort_values(["permno", "date"]).reset_index(drop=True)
+
+
+def pull_ciz_supplement(db, plan, permnos, start=DEFAULT_START, end=DEFAULT_END):
+    """Dated classification and adjustment factors omitted by older pulls."""
+    if plan.crsp_flavour != "ciz":
+        raise ValueError("CIZ supplement requires a CIZ source plan")
+    columns = set(plan.get("daily_columns_raw") or [])
+    wanted = [c for c in ("dlycumfacpr", "dlycumfacshr", "securitytype", "securitysubtype",
+              "sharetype", "usincflg", "issuertype", "primaryexch", "conditionaltype",
+              "tradingstatusflg") if c in columns]
+    if not {"conditionaltype", "tradingstatusflg"} <= set(wanted):
+        raise ValueError("Source plan lacks CIZ trading classification")
+    p, d = plan["daily_columns"]["permno"], plan["daily_columns"]["date"]
+    lo, hi = pd.Timestamp(start).date().isoformat(), pd.Timestamp(end).date().isoformat()
+    sql = (f"SELECT {p} AS permno, {d} AS date, {', '.join(wanted)} FROM {plan['daily_table']} "
+           f"WHERE {p} IN ({_int_list(permnos)}) AND {d} BETWEEN DATE '{lo}' AND DATE '{hi}'")
+    out = db.raw_sql(sql)
+    out["date"] = pd.to_datetime(out["date"])
+    out["permno"] = out["permno"].astype("int64")
+    out.attrs["sql"] = sql
+    return out
 
 
 # ---------------------------------------------------------------------------

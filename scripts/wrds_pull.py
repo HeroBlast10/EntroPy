@@ -90,16 +90,12 @@ def cmd_fundamentals(args: argparse.Namespace) -> int:
         gvkeys = sorted(link["gvkey"].astype(str).unique().tolist())
         print(f"  Restricting fundamentals to {len(gvkeys):,} GVKEYs linked to the universe.")
     else:
-        print(
-            "  WARNING: no CCM link found, pulling fundamentals for ALL GVKEYs. "
-            "Run `python scripts/wrds_pull.py universe` first.",
-            flush=True,
-        )
+        raise SystemExit("No CCM links; run universe before fundamentals. Refusing an unrestricted pull.")
 
     db = connect()
     try:
         summary = fundamentals_mod.run(
-            plan=plan, db=db, gvkeys=gvkeys, start=args.start, link=link
+            plan=plan, db=db, gvkeys=gvkeys, start=args.start, end=args.end, link=link
         )
     finally:
         db.close()
@@ -111,7 +107,8 @@ def cmd_fundamentals(args: argparse.Namespace) -> int:
     print(f"  fallback_table             {summary['fallback_table']}")
     print(f"  rows                       {summary['n_rows']:,}")
     print(f"    point-in-time            {summary['n_rows_point_in_time']:,}")
-    print(f"    restated                 {summary['n_rows_restated']:,}")
+    print(f"    non-PIT dependencies     {summary['n_rows_non_pit']:,}")
+    print(f"    current fundq vintage    {summary['n_rows_restated']:,}")
     print(f"  gvkeys                     {summary['n_gvkeys']:,}")
     for segment in summary["segments"]:
         print(
@@ -123,7 +120,7 @@ def cmd_fundamentals(args: argparse.Namespace) -> int:
         f"  rdq missing (imputed)      {avail['n_available_date_imputed']:,} "
         f"(lag {avail['imputation_lag_days']}d)"
     )
-    print(f"  later-Q values left NaN    {summary['differencing']['n_flow_values_left_as_nan']:,}")
+    print(f"  aggregation                {summary['aggregation_policy']}")
     if summary["permno_link"]:
         print(f"  rows with valid PERMNO     {summary['permno_link']['n_rows_matched_to_permno']:,}")
     if summary.get("caveat"):
@@ -154,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="probe first: every other step refuses to run without its report.",
     )
     parser.add_argument("--start", default="2009-01-01", help="history start (YYYY-MM-DD)")
-    parser.add_argument("--end", default="2026-07-21", help="history end (YYYY-MM-DD)")
+    parser.add_argument("--end", default="2025-12-31", help="history end (YYYY-MM-DD)")
     parser.add_argument(
         "--force-probe",
         action="store_true",

@@ -1,0 +1,26 @@
+# Independent WRDS research contract. Never splice past the licensed tape.
+date_range:
+  start: '2010-01-01'
+  end: '2025-12-31'
+paths:
+  factors: data/wrds/p0/factors.parquet
+  prices: data/wrds/p0/prices.parquet
+  universe: data/wrds/p0/universe.parquet
+  fundamentals: data/wrds/repaired/compustat_quarterly_processed.parquet
+  output: data/wrds/p0/nonlinear_alpha
+  oof: data/wrds/p0/nonlinear_alpha/oof_predictions.parquet
+  after_costs: data/wrds/p0/nonlinear_alpha/after_costs
+features:
+  - MOM_12_1M
+  - EARNINGS_YIELD
+  - BOOK_TO_MARKET
+  - GROSS_PROFITABILITY
+  - ASSET_GROWTH
+  - ACCRUALS
+  - PIOTROSKI_F8
+data_contract:
+  primary_key: permno
+  require_pit_membership: true
+  allow_restated_fundamentals: false  # CLI opt-in required for each research run
+  missing_terminal_return: raise     # explicit sensitivity needed for SIVB/SBNY
+  require_frozen_code: true

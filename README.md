@@ -10,7 +10,7 @@ EntroPy tests whether state-space, regime, entropy, mean-reversion, and classic 
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-297%20passed-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-460%20passed-brightgreen.svg)](#testing)
 [![Factors](https://img.shields.io/badge/factors-42%20registered-orange.svg)](#signal-library)
 
 </div>
@@ -18,6 +18,12 @@ EntroPy tests whether state-space, regime, entropy, mean-reversion, and classic 
 ---
 
 ## Research Goal
+
+The isolated WRDS pipeline is available with `python scripts/rebuild_wrds_research.py --refresh-fundamentals --refresh-supplement --jobs 4` (requires an entitled account and the membership/CCM downloads from `scripts/wrds_pull.py universe`). Subsequent rebuilds can reuse the saved raw pulls without the refresh flags. Outputs stay under `data/wrds/repaired/`; legacy results remain separate. See the [WRDS data contract](docs/data_dictionary.md#wrds-research-data-contract).
+
+CRSP research uses stable PERMNO aliases, dated S&P 500 membership, direct CIZ total returns and a common 2025-12-31 cutoff. Quarterly income is preserved, YTD cash flows are differenced, and derived fundamentals use versions eligible at each event. Restated fundq remains explicitly non-PIT. These baseline reruns do not replace the earlier nonlinear-model headline results.
+
+The first P0 batch adds terminal-aware ML labels, explicit feature allowlists and historical company/share-class valuation under `config/wrds_research.yaml`. Rebuild with `python scripts/rebuild_wrds_p0.py --refresh-company`; see [P0 contracts and verification](docs/wrds_p0.md).
 
 EntroPy is built around one practical quant research question:
 

@@ -41,6 +41,7 @@ except ImportError:
         return decorator if not args else decorator(args[0])
 
 from quant_platform.core.signals.base import FactorBase, FactorMeta
+from quant_platform.core.data.returns import trailing_total_return
 
 
 # ===================================================================
@@ -51,7 +52,7 @@ _ANN = np.sqrt(252)
 
 
 def _daily_returns(group: pd.Series) -> pd.Series:
-    return group.pct_change()
+    return group.pct_change(fill_method=None)
 
 
 @jit(nopython=True, cache=True)
@@ -180,7 +181,7 @@ class Vol20D(FactorBase):
         ret = (
             _feature_cache.get("ret_1d")
             if _feature_cache is not None
-            else df.groupby("ticker")["adj_close"].transform(_daily_returns)
+            else trailing_total_return(df)
         )
         vol = ret.groupby(df["ticker"]).transform(
             lambda s: s.rolling(20, min_periods=15).std() * _ANN
@@ -203,7 +204,7 @@ class Vol60D(FactorBase):
         ret = (
             _feature_cache.get("ret_1d")
             if _feature_cache is not None
-            else df.groupby("ticker")["adj_close"].transform(_daily_returns)
+            else trailing_total_return(df)
         )
         vol = ret.groupby(df["ticker"]).transform(
             lambda s: s.rolling(60, min_periods=40).std() * _ANN
@@ -233,7 +234,7 @@ class IdioVol(FactorBase):
         df["ret"] = (
             _feature_cache.get("ret_1d")
             if _feature_cache is not None
-            else df.groupby("ticker")["adj_close"].transform(_daily_returns)
+            else trailing_total_return(df)
         )
         # Market return: equal-weighted average across all tickers each day
         if _feature_cache is not None:
@@ -272,7 +273,7 @@ class Skew60D(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        ret = trailing_total_return(df)
         return ret.groupby(df["ticker"]).transform(
             lambda s: s.rolling(60, min_periods=40).skew()
         )
@@ -290,7 +291,7 @@ class Kurt60D(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        ret = trailing_total_return(df)
         return ret.groupby(df["ticker"]).transform(
             lambda s: s.rolling(60, min_periods=40).kurt()
         )
@@ -311,7 +312,7 @@ class DownVol60D(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        ret = trailing_total_return(df)
 
         # Fast vectorized computation using Numba
         def _compute_downvol(group: pd.Series) -> pd.Series:
@@ -337,7 +338,7 @@ class TailRisk(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        ret = trailing_total_return(df)
 
         # Fast vectorized computation using Numba
         def _compute_cvar(group: pd.Series) -> pd.Series:
@@ -369,7 +370,7 @@ class VolOfVol(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        ret = trailing_total_return(df)
         # Step 1: 20-day rolling vol
         vol20 = ret.groupby(df["ticker"]).transform(
             lambda s: s.rolling(20, min_periods=15).std() * _ANN
@@ -404,7 +405,7 @@ class RealizedJump(FactorBase):
 
     def _compute(self, prices: pd.DataFrame, fundamentals=None) -> pd.Series:
         df = prices.sort_values(["ticker", "date"])
-        ret = df.groupby("ticker")["adj_close"].transform(_daily_returns)
+        ret = trailing_total_return(df)
         abs_ret = ret.abs()
         abs_ret_lag = abs_ret.groupby(df["ticker"]).shift(1)
         bpv_term = abs_ret * abs_ret_lag  # |r_t| * |r_{t-1}|

@@ -45,25 +45,22 @@ SIGNALS = {
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=ROOT / "config/wrds_research.yaml")
     parser.add_argument(
         "--oof",
         type=Path,
-        default=ROOT / "data/experiments/nonlinear_alpha/oof_predictions.parquet",
     )
     parser.add_argument(
         "--prices",
         type=Path,
-        default=ROOT / "data/prices/prices.parquet",
     )
     parser.add_argument(
         "--universe",
         type=Path,
-        default=ROOT / "data/universe/universe.parquet",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT / "data/experiments/nonlinear_alpha/after_costs",
     )
     parser.add_argument(
         "--frequencies",
@@ -87,9 +84,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--allow-non-pit-research",
         action="store_true",
-        help="Explicitly permit a survivorship-biased research universe.",
+        help="Deprecated financial-vintage waiver; universe PIT is always required.",
     )
-    return parser.parse_args()
+    parser.add_argument("--allow-restated-fundamentals", action="store_true")
+    args = parser.parse_args()
+    import yaml
+    settings = yaml.safe_load(args.config.read_text(encoding="utf-8"))
+    for key in ("oof", "prices", "universe", "output"):
+        if getattr(args, key) is None:
+            setattr(args, key, ROOT / settings["paths"]["after_costs" if key == "output" else key])
+    return args
 
 
 def _sha256(path: Path) -> str:
@@ -155,10 +159,10 @@ def _validate_upstream_metadata(
             f"{noncausal.index.tolist()}"
         )
     if (
-        not args.allow_non_pit_research
+        not (args.allow_non_pit_research or getattr(args, "allow_restated_fundamentals", False))
         and bool(
             metadata.get("provenance", {}).get(
-                "allow_non_pit_research",
+                "allow_restated_fundamentals",
                 False,
             )
         )
@@ -171,6 +175,7 @@ def _attach_current_forward_returns(
     signals: pd.DataFrame,
     prices: pd.DataFrame,
     horizon: int,
+    missing_terminal_return: str = "raise",
 ) -> tuple[pd.DataFrame, pd.Timestamp, int]:
     """Align labels to the price calendar actually on disk.
 
@@ -180,39 +185,15 @@ def _attach_current_forward_returns(
     forward return is unknowable; that day carries no information and dropping
     it is preferable to aborting the entire after-cost evaluation.
     """
-    price_col = "adj_close" if "adj_close" in prices.columns else "close"
     calendar = pd.DatetimeIndex(
         prices["date"].dropna().unique()
     ).sort_values()
     if len(calendar) <= horizon:
         raise ValueError("Insufficient price dates for forward returns")
-    calendar_frame = pd.DataFrame({
-        "date": calendar,
-        "_label_date": pd.Series(
-            calendar,
-            index=calendar,
-        ).shift(-horizon).to_numpy(),
-    })
-    current = prices[["date", "ticker", price_col]].rename(
-        columns={price_col: "_current_price"}
-    )
-    future = prices[["date", "ticker", price_col]].rename(
-        columns={"date": "_label_date", price_col: "_future_price"}
-    )
-    labels = (
-        signals[["date", "ticker"]]
-        .merge(current, on=["date", "ticker"], how="left", validate="one_to_one")
-        .merge(calendar_frame, on="date", how="left", validate="many_to_one")
-        .merge(
-            future,
-            on=["_label_date", "ticker"],
-            how="left",
-            validate="one_to_one",
-        )
-    )
-    labels["forward_return"] = (
-        labels["_future_price"] / labels["_current_price"] - 1.0
-    )
+    from quant_platform.core.data.returns import forward_total_returns
+    last_pos = min(int(calendar.searchsorted(signals.date.max())) + horizon, len(calendar)-1)
+    label_prices = prices[prices.date.between(signals.date.min(), calendar[last_pos])]
+    labels = forward_total_returns(label_prices, horizon, missing_terminal_return=missing_terminal_return)
     refreshed = signals.drop(columns=["forward_return"], errors="ignore").merge(
         labels[["date", "ticker", "forward_return"]],
         on=["date", "ticker"],
@@ -263,6 +244,10 @@ def _load_inputs(
 
     prices = pd.read_parquet(args.prices)
     prices["date"] = pd.to_datetime(prices["date"])
+    universe = pd.read_parquet(args.universe)
+    universe["date"] = pd.to_datetime(universe["date"])
+    from quant_platform.core.data.research_contract import require_wrds_identity
+    require_wrds_identity(universe, prices)
     if prices.duplicated(["date", "ticker"]).any():
         raise ValueError("Price data contain duplicate date/ticker keys")
     universe_sha256 = _sha256(args.universe)
@@ -272,11 +257,14 @@ def _load_inputs(
         prices_sha256=prices_sha256,
         universe_sha256=universe_sha256,
     )
+    if period_end := upstream.get("period", {}).get("end"):
+        prices = prices.loc[prices.date.le(pd.Timestamp(period_end))].copy()
     oof = oof.dropna(subset=[*SIGNALS.values()]).copy()
     oof, evaluation_end, dropped_terminal_rows = _attach_current_forward_returns(
         oof,
         prices,
         horizon,
+        missing_terminal_return=upstream.get("label_audit", {}).get("missing_terminal_return_policy", "raise"),
     )
     signal_dates = pd.DatetimeIndex(oof["date"].unique()).sort_values()
     available_price_dates = pd.DatetimeIndex(
@@ -293,13 +281,6 @@ def _load_inputs(
         prices["date"].between(history_start, evaluation_end)
     ].copy()
 
-    universe = pd.read_parquet(args.universe)
-    universe["date"] = pd.to_datetime(universe["date"])
-    if not args.allow_non_pit_research:
-        require_point_in_time_universe(
-            universe,
-            context="transaction-cost alpha comparison",
-        )
     universe = lag_universe_eligibility(universe, periods=1)
     eligible = universe.loc[
         universe["pass_all_filters"].fillna(False).astype(bool)
@@ -335,6 +316,9 @@ def _load_inputs(
 
 def main() -> None:
     args = _parse_args()
+    from quant_platform.core.utils.provenance import git_dirty, WRDS_CODE_PATHS
+    if git_dirty(ROOT, paths=WRDS_CODE_PATHS) is not False:
+        raise ValueError("Commit tracked source changes before WRDS evaluation")
     if args.initial_capital <= 0:
         raise ValueError("--initial-capital must be positive")
     if not 0 < args.max_participation_rate <= 1:
@@ -409,6 +393,7 @@ def main() -> None:
                 initial_capital=args.initial_capital,
                 output_dir=portfolio_dir / "backtest",
                 benchmark_market=None,
+                missing_terminal_return=upstream.get("label_audit", {}).get("missing_terminal_return_policy", "raise"),
             )
             ic_sample = oof.dropna(subset=["forward_return"])
             ic_metrics, _ = evaluate_alpha(ic_sample, signal_col)
@@ -512,7 +497,9 @@ def main() -> None:
         "generated_at_utc": now_utc(),
         "code": {
             "git_head": git_head(ROOT),
-            "git_dirty": git_dirty(ROOT),
+            "git_dirty": git_dirty(ROOT, paths=WRDS_CODE_PATHS),
+            "scope": list(WRDS_CODE_PATHS),
+            "reproducible_from_commit": bool(git_head(ROOT)) and git_dirty(ROOT, paths=WRDS_CODE_PATHS) is False,
             "python": sys.version.split()[0],
         },
         "dropped_terminal_rows": dropped_terminal_rows,
@@ -536,11 +523,9 @@ def main() -> None:
             "evaluation_end": str(evaluation_end.date()),
         },
         "cost_model": cost_model.describe(),
-        "data_contract": (
-            "research_non_pit_explicit"
-            if args.allow_non_pit_research
-            else "point_in_time_required"
-        ),
+        "data_contract": {"membership_is_point_in_time": True, "primary_key": "permno",
+                          "allow_restated_fundamentals": bool(args.allow_non_pit_research or args.allow_restated_fundamentals),
+                          "missing_terminal_return_policy": upstream.get("label_audit", {}).get("missing_terminal_return_policy", "raise")},
         "inputs": {
             "oof": {"path": str(args.oof.resolve()), "sha256": _sha256(args.oof)},
             "prices": {

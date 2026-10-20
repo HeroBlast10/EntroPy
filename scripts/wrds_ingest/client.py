@@ -44,7 +44,7 @@ if str(ROOT) not in sys.path:
 
 import pandas as pd
 
-from quant_platform.core.utils.provenance import build_metadata, write_run_metadata
+from quant_platform.core.utils.provenance import build_metadata, write_run_metadata, WRDS_CODE_PATHS
 
 WRDS_DIR = ROOT / "data" / "wrds"
 PROBE_REPORT_PATH = WRDS_DIR / "probe_report.json"
@@ -377,6 +377,7 @@ def write_table(
     params: Mapping[str, Any] | None = None,
     extra: Mapping[str, Any] | None = None,
     index: bool = False,
+    inputs: Mapping[str, Path | str] | None = None,
 ) -> Path:
     """Write parquet atomically and record provenance next to it.
 
@@ -397,8 +398,9 @@ def write_table(
     meta_path = destination.with_name(destination.stem + "_run_metadata.json")
     write_run_metadata(
         meta_path,
+        code_paths=WRDS_CODE_PATHS,
         stage=stage,
-        inputs={"source_plan": PROBE_REPORT_PATH},
+        inputs={"source_plan": PROBE_REPORT_PATH, "output": destination, **dict(inputs or {})},
         params=dict(params or {}),
         extra={
             "artifact": destination.name,

@@ -19,22 +19,12 @@ are recorded (with their SHA-256) in each artifact's ``run_metadata.json``, and
 rebuild every downstream number from them. Pass ``--refresh-data`` only when you
 intentionally want to move the inputs forward.
 
-Why two steps carry ``--allow-non-pit-research``
------------------------------------------------
-The universe in ``data/universe/universe.parquet`` is built from *today's*
-S&P 500 constituents plus a dynamic liquidity screen, so its membership is
-``current_constituent_seed_dynamic_proxy`` and ``membership_is_point_in_time``
-is False. It carries survivorship bias by construction.
-
-``require_point_in_time_universe`` therefore fails closed on it. Rather than
-weakening that guard, the two non-linear stages opt in explicitly, and the
-waiver is recorded as ``allow_non_pit_research: true`` in the metadata written
-next to every artifact they emit. Relaxing it silently is the failure mode this
-whole script exists to prevent.
-
-Fixing the root cause means supplying a real membership history via
-``universe.membership_file`` in ``config/settings.yaml``; until then these two
-numbers inherit the universe caveat.
+The first four stages retain the legacy Yahoo research workflow. Nonlinear
+and aftercosts now require separately rebuilt licensed WRDS inputs, configured
+in config/wrds_research.yaml. Their explicit waiver covers restated financials
+only; index membership and PERMNO identity are always checked. The explicit
+total_loss terminal policy is a sensitivity assumption for missing SIVB/SBNY
+payoffs, never an observed return. See docs/wrds_p0.md before interpreting runs.
 """
 
 from __future__ import annotations
@@ -57,16 +47,17 @@ STEPS: list[tuple[str, list[str], bool]] = [
     ("factors", ["scripts/build_factors.py", "--evaluate"], False),
     ("evaluate", ["scripts/evaluate_all_factors_fast.py"], False),
     ("backtest", ["scripts/backtest_factor_candidates.py"], False),
-    # These two read the non-PIT universe, so they must state that waiver
-    # explicitly; see the module docstring.
+    # Separate WRDS dataset; the financial-vintage waiver cannot bypass keys.
     (
         "nonlinear",
-        ["scripts/evaluate_nonlinear_alpha.py", "--allow-non-pit-research"],
+        ["scripts/evaluate_nonlinear_alpha.py", "--config", "config/wrds_research.yaml",
+         "--allow-restated-fundamentals", "--missing-terminal-return", "total_loss"],
         False,
     ),
     (
         "aftercosts",
-        ["scripts/evaluate_alpha_after_costs.py", "--allow-non-pit-research"],
+        ["scripts/evaluate_alpha_after_costs.py", "--config", "config/wrds_research.yaml",
+         "--allow-restated-fundamentals"],
         False,
     ),
 ]

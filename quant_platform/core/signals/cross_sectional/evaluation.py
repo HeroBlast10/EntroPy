@@ -99,6 +99,7 @@ def add_forward_returns(
     price_col: str = "adj_close",
     date_col: str = "date",
     ticker_col: str = "ticker",
+    missing_terminal_return: str = "raise",
 ) -> pd.DataFrame:
     """Compute forward returns for multiple holding periods.
 
@@ -108,10 +109,15 @@ def add_forward_returns(
     df = prices.copy()
     df.sort_values([ticker_col, date_col], inplace=True)
 
+    from quant_platform.core.data.returns import forward_total_returns
+    work = df[[date_col, ticker_col]].rename(columns={date_col: "date", ticker_col: "ticker"})
+    work["adj_close"] = df[price_col]
+    for c in ("total_return", "is_terminal", "close"):
+        if c in df:
+            work[c] = df[c]
     for p in periods:
-        col_name = f"fwd_ret_{p}d"
-        future_price = df.groupby(ticker_col)[price_col].shift(-p)
-        df[col_name] = future_price / df[price_col] - 1.0
+        labels = forward_total_returns(work, p, missing_terminal_return=missing_terminal_return)
+        df[f"fwd_ret_{p}d"] = labels.forward_return
     return df
 
 

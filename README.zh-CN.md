@@ -10,7 +10,7 @@ EntroPy 用于检验状态空间、市场状态、熵、均值回复与传统横
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-297%20passed-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-460%20passed-brightgreen.svg)](#测试)
 [![Factors](https://img.shields.io/badge/factors-42个注册因子-orange.svg)](#因子库)
 
 </div>
@@ -18,6 +18,12 @@ EntroPy 用于检验状态空间、市场状态、熵、均值回复与传统横
 ---
 
 ## 研究目标
+
+WRDS 独立研究入口：`python scripts/rebuild_wrds_research.py --refresh-fundamentals --refresh-supplement --jobs 4`。需已授权账户，以及 `scripts/wrds_pull.py universe` 下载的成分和 CCM 链接；后续重建可去掉 refresh 参数，复用已保存的原始拉取。产物保存在 `data/wrds/repaired/`，与旧结果分开，详见[WRDS 数据约定](docs/data_dictionary.md#wrds-research-data-contract)。
+
+新流水线使用固定 PERMNO 标识、历史成分、CIZ 总收益及统一的 2025-12-31 截止日期；保留季度利润表数值，仅对年内累计现金流差分，并按当时有效的历史版本派生特征。修订版 fundq 仍明确标记为非 PIT。这次基线重跑不能直接替换旧的非线性模型头条数字。
+
+第一批 P0 修复已加入退市结算标签、ML 特征白名单及历史公司/股类市值。独立配置为 `config/wrds_research.yaml`；执行 `python scripts/rebuild_wrds_p0.py --refresh-company` 重建，详见 [P0 数据约定与验收](docs/wrds_p0.md)。
 
 EntroPy 围绕一个更接近真实投研的问题构建：
 

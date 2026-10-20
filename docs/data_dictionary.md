@@ -96,9 +96,9 @@ available_date = publish_date + publication_lag_days   (default 45 cal days)
 date           = next_trading_day(available_date)
 ```
 
-This ensures that on any given backtest date *t*, only information that was
-**publicly available before *t*** is used — eliminating look-ahead bias
-from late filings, restatements, or data vendor back-fill.
+Availability alignment controls publication timing. It cannot remove
+restatement or vendor back-fill bias from a source that does not preserve
+historical vintages. Only versioned inputs can support that stronger claim.
 
 ---
 
@@ -130,3 +130,43 @@ compare against the manifest.
   (date, ticker) pair — not that the value is zero.
 - **Compression**: Parquet files use **zstd** compression.
 - **Sort order**: Every table is sorted by `(date, ticker)`.
+
+## WRDS research data contract
+
+The subsequent [P0 correctness batch](wrds_p0.md) uses independent
+`config/wrds_research.yaml` paths under `data/wrds/p0/`. It adds historical
+PERMCO/all-common-class company caps, company financial attribution, explicit
+ML feature schemas and terminal-aware labels. The original repaired baseline
+below remains a separate version of the experiment.
+
+The isolated adapter writes `data/wrds/repaired/`, with an end date of
+2025-12-31 for the supplied CRSP tape. Original downloads remain unchanged;
+the validation report checks their SHA-256 hashes.
+
+| Artifact / field | Meaning |
+| --- | --- |
+| `prices.parquet` | Unique `(date, permno)`. `ticker=PERMNO:<id>` is a stable compatibility key, not an exchange ticker. `close` sizes trades; `total_return` marks holdings. |
+| CIZ units | Market cap and shares outstanding convert from thousands to dollars/shares; daily volume is already shares. |
+| `is_terminal` | CIZ delisting row. Embedded total return is applied once, even if the row cannot trade; marked holdings then settle into cash. No pending order may reopen the security. |
+| Missing terminal return | Default execution raises. The research runner separately replays `total_loss` and `zero_return` assumptions and records their counts and policy. Neither assumption is an observed return. |
+| `universe.parquet` | Inclusive historical membership intervals plus dated liquidity/size/age filters; genuine membership provenance passes the PIT universe gate. No current ticker join. |
+| `*_raw.parquet` | All Snapshot versions and full-window fundq fallback, including companies/periods absent from the historical Snapshot sample. |
+| `available_date` | Strictly the next XNYS session after source availability; date-only input never implies intraday availability. An additional one-session signal lag is applied before portfolio decisions. |
+| `valid_until` | Snapshot's inclusive source end date mapped to the next XNYS session; the projection excludes a version at and after this bound. Expiry clears unavailable values. |
+| Quarterly values | Income fields such as `saleq`, `niq`, `cogsq` are single-quarter flows; only YTD items such as `oancfy`, `capxy` are differenced. Stocks are never summed into TTM. |
+| TTM / YoY | Four complete consecutive fiscal quarters for flows; dated, unambiguous prior-year matches. Conflicting fiscal labels and unavailable dependencies yield missing values, never join fan-out. |
+| `*_is_point_in_time`, `*_mixed_vintage`, `*_available_date` | Per-derived-field vintage and maximum dependency availability. Row `is_point_in_time` requires every emitted finite value to have PIT dependencies. Standard fundq is always non-PIT, even with rdq. |
+| Currency | Price-scaled fundamental factors require USD reporting currency; unknown/non-USD values are excluded rather than compared to USD market cap. Financial amounts remain millions before conversion of E/P and B/M numerators. |
+| F8 | Missing legs invalidate the score. The issuance leg uses split-adjusted shares (`CSHOQ * AJEXQ`) in both periods. See S&P's [Compustat data guide](https://library.unist.ac.kr/libguide/wp-content/uploads/sites/2/2018/11/compustat.pdf). |
+| `candidate_backtests/` | Monthly symmetric quintile spreads, gross target 1, $1m initial capital, 10% ADV fill limit, modeled costs/borrow, no sector constraints without historical classifications. Ties share their sleeve; fewer than 100 valid names holds cash. |
+
+`factor_coverage.csv`, `candidate_backtests_summary.csv`,
+`fundamentals_summary.json` and `validation_report.json` provide acceptance
+evidence. Capacity is estimated from original rebalance requests (excluding
+residual retries), normalized to initial capital, using the 95th percentile
+of daily maxima. Requested and executed p95 use the same sample; legacy
+trade lists without rebalance provenance explicitly use all positive
+whole-share requests. This is not a full replay
+at that capital. The separate maximum-order capacity is stricter. Missing
+TAQ prevents microstructure cost calibration, but does not block this daily
+research pipeline. The restated fundamental strategies remain research-only.

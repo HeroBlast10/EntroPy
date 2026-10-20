@@ -54,6 +54,18 @@ DEFAULT_PACKAGES: tuple[str, ...] = (
 
 _CHUNK = 8 * 1024 * 1024
 
+# Explicit dependency scope for the independent WRDS research pipeline.
+# Paper-broker workflows can be edited concurrently without changing WRDS
+# execution. Untracked Python files INSIDE this scope still block a freeze.
+WRDS_CODE_PATHS = (
+    "quant_platform", ":(exclude)quant_platform/core/execution/paper",
+    "scripts/wrds_ingest", "scripts/wrds_pull.py", "scripts/rebuild_wrds_research.py",
+    "scripts/verify_wrds_research.py", "scripts/rebuild_wrds_p0.py", "scripts/verify_wrds_p0.py",
+    "scripts/evaluate_nonlinear_alpha.py", "scripts/evaluate_alpha_after_costs.py",
+    "scripts/reproduce_all.py", "config/wrds_research.yaml", "config/settings.yaml",
+    "pyproject.toml", "requirements.txt",
+)
+
 
 def fingerprint(path: Path | str) -> dict[str, Any]:
     """SHA-256, size and mtime of an input file.
@@ -100,15 +112,18 @@ def git_head(cwd: Path | str = ROOT) -> Optional[str]:
         return None
 
 
-def git_dirty(cwd: Path | str = ROOT) -> Optional[bool]:
+def git_dirty(cwd: Path | str = ROOT, *, paths: Sequence[str] | None = None) -> Optional[bool]:
     """True when the working tree has staged or unstaged modifications.
 
     Returns None if git is unavailable. Untracked files are ignored: they do
     not affect imported code, unlike modifications to tracked files.
     """
     try:
+        command = ["git", "status", "--porcelain", "--untracked-files=all" if paths else "--untracked-files=no"]
+        if paths:
+            command += ["--", *paths]
         result = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
+            command,
             cwd=str(cwd),
             check=True,
             capture_output=True,
@@ -138,6 +153,7 @@ def build_metadata(
     extra: Mapping[str, Any] | None = None,
     packages: Sequence[str] = DEFAULT_PACKAGES,
     git_dir: Path | str = ROOT,
+    code_paths: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Assemble the run metadata dictionary.
 
@@ -145,13 +161,14 @@ def build_metadata(
     their expected layout.
     """
     head = git_head(git_dir)
-    dirty = git_dirty(git_dir)
+    dirty = git_dirty(git_dir, paths=code_paths)
     record: dict[str, Any] = {
         "stage": stage,
         "generated_at_utc": now_utc(),
         "code": {
             "git_head": head,
             "git_dirty": dirty,
+            "scope": list(code_paths) if code_paths else ["tracked working tree"],
             "reproducible_from_commit": bool(head) and dirty is False,
             "python": sys.version.split()[0],
             "platform": platform.platform(),

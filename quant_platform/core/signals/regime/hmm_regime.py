@@ -394,7 +394,7 @@ class HMMTurbulenceProbability(FactorBase):
         fundamentals: Optional[pd.DataFrame] = None,
     ) -> pd.Series:
         df = prices.sort_values(["ticker", "date"]).copy()
-        df["ret"] = df.groupby("ticker")["adj_close"].pct_change()
+        df["ret"] = df.groupby("ticker")["adj_close"].pct_change(fill_method=None)
 
         min_history = int(self._extra_params.get("min_history", self._meta.lookback))
         train_window = int(

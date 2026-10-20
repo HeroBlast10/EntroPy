@@ -32,7 +32,7 @@ from scripts.wrds_ingest import universe as uv
 
 @pytest.fixture
 def one_company_cumulative() -> pd.DataFrame:
-    """Four quarters of year-to-date revenue totalling 500."""
+    """Four quarters of year-to-date operating cash flow totalling 500."""
     return pd.DataFrame(
         {
             "gvkey": ["001234"] * 4,
@@ -44,23 +44,23 @@ def one_company_cumulative() -> pd.DataFrame:
             ),
             "fyearq": [2020] * 4,
             "fqtr": [1, 2, 3, 4],
-            "saleq": [100.0, 250.0, 380.0, 500.0],   # cumulative within FY2020
+            "oancfy": [100.0, 250.0, 380.0, 500.0],
             "atq": [1000.0, 1050.0, 1100.0, 1150.0],  # stock, not cumulative
         }
     )
 
 
 def test_cumulative_flow_is_differenced(one_company_cumulative):
-    quarterly, stats = fb.to_single_quarter(one_company_cumulative, ["saleq", "atq"])
+    quarterly, stats = fb.to_single_quarter(one_company_cumulative, ["oancfy", "atq"])
 
     # 100, 150, 130, 120 -- not 100, 250, 380, 500.
-    assert quarterly["saleq_q"].round(6).tolist() == [100.0, 150.0, 130.0, 120.0]
+    assert quarterly["oancfy_q"].round(6).tolist() == [100.0, 150.0, 130.0, 120.0]
     assert stats["n_flow_items"] == 1
     assert stats["n_flow_values_left_as_nan"] == 0
 
 
 def test_stock_items_are_never_differenced(one_company_cumulative):
-    quarterly, _ = fb.to_single_quarter(one_company_cumulative, ["saleq", "atq"])
+    quarterly, _ = fb.to_single_quarter(one_company_cumulative, ["oancfy", "atq"])
     assert quarterly["atq_q"].tolist() == [1000.0, 1050.0, 1100.0, 1150.0]
 
 
@@ -76,13 +76,13 @@ def test_missing_prior_quarter_yields_nan_not_year_to_date():
             "datadate": pd.to_datetime(["2020-03-31", "2020-09-30"]),
             "fyearq": [2020, 2020],
             "fqtr": [1, 3],
-            "saleq": [100.0, 380.0],
+            "oancfy": [100.0, 380.0],
         }
     )
-    quarterly, stats = fb.to_single_quarter(frame, ["saleq"])
+    quarterly, stats = fb.to_single_quarter(frame, ["oancfy"])
 
-    assert quarterly["saleq_q"].tolist()[0] == 100.0
-    assert np.isnan(quarterly["saleq_q"].tolist()[1])
+    assert quarterly["oancfy_q"].tolist()[0] == 100.0
+    assert np.isnan(quarterly["oancfy_q"].tolist()[1])
     assert stats["n_flow_values_left_as_nan"] == 1
 
 
@@ -93,15 +93,15 @@ def test_fiscal_year_boundary_does_not_difference_across_years():
             "datadate": pd.to_datetime(["2020-12-31", "2021-03-31", "2021-06-30"]),
             "fyearq": [2020, 2021, 2021],
             "fqtr": [4, 1, 2],
-            "saleq": [500.0, 90.0, 200.0],
+            "oancfy": [500.0, 90.0, 200.0],
         }
     )
-    quarterly, stats = fb.to_single_quarter(frame, ["saleq"])
+    quarterly, stats = fb.to_single_quarter(frame, ["oancfy"])
 
     # 2021-Q1 restarts accumulation, so no prior quarter exists -> NaN, not 90-500.
-    assert np.isnan(quarterly["saleq_q"].tolist()[0])   # FY2020 Q4 with no Q3 either
-    assert quarterly["saleq_q"].tolist()[1] == 90.0     # Q1 is already single-quarter
-    assert quarterly["saleq_q"].tolist()[2] == 110.0    # 200 - 90
+    assert np.isnan(quarterly["oancfy_q"].tolist()[0])
+    assert quarterly["oancfy_q"].tolist()[1] == 90.0
+    assert quarterly["oancfy_q"].tolist()[2] == 110.0
     assert stats["n_flow_values_left_as_nan"] == 1
 
 
@@ -230,8 +230,8 @@ def test_availability_prefers_rdq_and_counts_imputation():
     )
     out, stats = fb.availability_dates(frame)
 
-    assert out["available_date"].iloc[0] == pd.Timestamp("2020-05-01")
-    assert out["available_date"].iloc[1] == pd.Timestamp("2020-06-30") + pd.Timedelta(days=90)
+    assert out["available_date"].iloc[0] == pd.Timestamp("2020-05-04")
+    assert out["available_date"].iloc[1] == pd.Timestamp("2020-09-29")
     assert stats["n_available_date_imputed"] == 1
 
 
@@ -243,7 +243,7 @@ def test_availability_never_precedes_period_end():
         }
     )
     out, stats = fb.availability_dates(frame)
-    assert out["available_date"].iloc[0] == pd.Timestamp("2020-12-31")
+    assert out["available_date"].iloc[0] == pd.Timestamp("2021-01-04")
     assert stats["n_available_date_clipped"] == 1
 
 

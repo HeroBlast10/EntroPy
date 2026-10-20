@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from quant_platform.core.signals.base import FactorBase, FactorMeta
+from quant_platform.core.data.returns import trailing_total_return
 
 
 # ===================================================================
@@ -122,7 +123,7 @@ class IlliqAmihud(FactorBase):
             ret = _feature_cache.get("ret_1d")
             dollar_vol = _feature_cache.get("dollar_vol")
         else:
-            ret = df.groupby("ticker")["adj_close"].transform(lambda s: s.pct_change())
+            ret = trailing_total_return(df)
             dollar_vol = df["close"].abs() * df["volume"].astype(float)
         # |ret| / dollar_volume, scaled by 1e6 to keep numbers reasonable
         illiq_daily = _safe_div(ret.abs(), dollar_vol) * 1e6
@@ -184,7 +185,7 @@ class PriceImpact(FactorBase):
         ret = (
             _feature_cache.get("ret_1d")
             if _feature_cache is not None
-            else df.groupby("ticker")["adj_close"].transform(lambda s: s.pct_change())
+            else trailing_total_return(df)
         )
         # Signed volume: volume × sign(return)
         sign_vol = df["volume"].astype(float) * np.sign(ret)

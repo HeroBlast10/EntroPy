@@ -314,6 +314,7 @@ def simulate_execution(
     adv_lookback: Optional[int] = None,
     vol_lookback: int = 20,
     return_daily_ledger: bool = False,
+    missing_terminal_return: str = "raise",
 ) -> Union[pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
     """Simulate fills and PnL under a close-target convention.
 
@@ -334,6 +335,8 @@ def simulate_execution(
     """
     if cost_model is None:
         cost_model = CostModel()
+    if missing_terminal_return not in {"raise", "total_loss", "zero_return"}:
+        raise ValueError("missing_terminal_return must be raise, total_loss, or zero_return")
     if adv_lookback is None:
         adv_lookback = int(cost_model.adv_lookback)
     if adv_lookback <= 0:
@@ -348,7 +351,9 @@ def simulate_execution(
         raise ValueError(f"prices missing columns: {sorted(missing)}")
 
     dw = daily_weights.copy()
-    px = prices.copy()
+    execution_columns = ["date", "ticker", "adj_close", "close", "volume", "is_tradable",
+                         "total_return", "is_terminal", "permno"]
+    px = prices[[c for c in execution_columns if c in prices]].copy()
     dw["date"] = pd.to_datetime(dw["date"])
     px["date"] = pd.to_datetime(px["date"])
     dw["weight"] = pd.to_numeric(dw["weight"], errors="coerce").fillna(0.0)
@@ -358,7 +363,12 @@ def simulate_execution(
         raise ValueError("prices must have at most one row per date/ticker")
 
     px = px.sort_values(["ticker", "date"]).copy()
-    px["stock_ret"] = px.groupby("ticker", sort=False)["adj_close"].pct_change(fill_method=None)
+    px["stock_ret"] = (pd.to_numeric(px["total_return"], errors="coerce") if "total_return" in px
+                       else px.groupby("ticker", sort=False)["adj_close"].pct_change(fill_method=None))
+    if "is_terminal" not in px:
+        px["is_terminal"] = False
+    if (px["stock_ret"].dropna() < -1).any():
+        raise ValueError("Total returns cannot be below -100%")
     tradable = px["is_tradable"].fillna(False).astype(bool) if "is_tradable" in px else pd.Series(True, index=px.index)
     px["is_tradable"] = tradable
     if "volume" in px:
@@ -392,9 +402,13 @@ def simulate_execution(
     peak_gross = nav_gross
     trade_frames: list[pd.DataFrame] = []
     ledger_rows: list[dict] = []
+    terminated: set[str] = set()
+    weight_groups = {dt: g for dt, g in dw.groupby("date", sort=False)}
 
-    for dt in dates:
-        group = dw.loc[dw["date"].eq(dt)]
+    for date_no, dt in enumerate(dates):
+        if date_no and date_no % 1000 == 0:
+            logger.info("Execution progress: {}/{} sessions, date={}", date_no, len(dates), dt.date())
+        group = weight_groups[dt]
         target = group.set_index("ticker")["weight"].sort_index()
         explicit_rebalance = (
             bool(group["is_rebalance"].fillna(False).astype(bool).any())
@@ -418,15 +432,30 @@ def simulate_execution(
         last_target = target.copy()
 
         prev_nav = nav_net
+        settlement_value = 0.0
+        terminal_imputations = 0
         if dt in available_dates:
             px_today = px_lookup.loc[dt]
             if isinstance(px_today, pd.Series):
                 px_today = px_today.to_frame().T
+            terminal_today = px_today.index[px_today["is_terminal"].fillna(False).astype(bool)]
+            held_terminal = positions.index.intersection(terminal_today)
             day_ret = pd.to_numeric(
                 px_today["stock_ret"].reindex(positions.index), errors="coerce"
-            ).fillna(0.0)
+            )
+            missing_terminal = held_terminal.intersection(day_ret.index[day_ret.isna()])
+            if len(missing_terminal):
+                from quant_platform.core.data.returns import terminal_return_value
+                day_ret.loc[missing_terminal] = terminal_return_value(missing_terminal_return)
+                terminal_imputations = len(missing_terminal)
+            day_ret = day_ret.fillna(0.0)
             pnl_dollar = float((positions * day_ret).sum())
             positions = positions * (1.0 + day_ret)
+            # NAV already contains marked proceeds; removing dollar holdings
+            # settles them into implicit cash without a second PnL or a trade.
+            settlement_value = float(positions.reindex(held_terminal).sum())
+            positions = positions.drop(index=held_terminal)
+            terminated.update(terminal_today)
             price_column = "close" if "close" in px_today else "adj_close"
             price_series = pd.to_numeric(px_today[price_column], errors="coerce")
             adv_series = pd.to_numeric(px_today["adv_shares"], errors="coerce")
@@ -438,6 +467,9 @@ def simulate_execution(
             adv_series = pd.Series(dtype=float)
             vol_series = pd.Series(dtype=float)
             tradable_series = pd.Series(dtype=bool)
+
+        target = target.drop(index=list(terminated), errors="ignore")
+        pending_orders = pending_orders.drop(index=list(terminated), errors="ignore")
 
         gross_ret = pnl_dollar / prev_nav if prev_nav else 0.0
         nav_before_borrow = prev_nav + pnl_dollar
@@ -483,6 +515,7 @@ def simulate_execution(
             if not orders.empty:
                 orders = _attach_costs(orders, cost_model)
                 orders.insert(0, "date", dt)
+                orders["is_rebalance_order"] = is_rebalance
                 orders["portfolio_value_before_trade"] = capital_before_trade
                 trade_frames.append(orders)
                 trading_cost = float(orders["total_cost"].sum())
@@ -534,6 +567,9 @@ def simulate_execution(
                 "short_exposure": float(-actual_after[actual_after < 0].sum()),
                 "is_rebalance": is_rebalance,
                 "has_pending_orders": not pending_orders.empty,
+                "terminal_settlement_value": settlement_value,
+                "terminal_return_imputations": terminal_imputations,
+                "missing_terminal_return_policy": missing_terminal_return,
             }
         )
 
@@ -543,6 +579,11 @@ def simulate_execution(
         else _empty_trades()
     )
     ledger = pd.DataFrame(ledger_rows).set_index("date")
+    if "permno" in px:
+        identity = px[["ticker", "permno"]].drop_duplicates()
+        if identity["ticker"].duplicated().any():
+            raise ValueError("Ticker compatibility key maps to multiple PERMNOs")
+        trades["permno"] = trades["ticker"].map(identity.set_index("ticker")["permno"])
     trades.attrs["daily_ledger"] = ledger
     if trades.empty:
         logger.warning("No trades generated across the backtest period")

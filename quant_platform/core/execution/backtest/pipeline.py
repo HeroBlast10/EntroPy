@@ -35,6 +35,7 @@ def run_trading_pipeline(
     benchmark_path: Optional[Path | str] = None,
     risk_free_rate: float = 0.0,
     capacity_capitals: Optional[Iterable[float]] = None,
+    missing_terminal_return: str = "raise",
 ) -> Dict[str, object]:
     """End-to-end trading simulation pipeline.
 
@@ -126,6 +127,7 @@ def run_trading_pipeline(
         cost_model=cost_model,
         initial_capital=initial_capital,
         return_daily_ledger=True,
+        missing_terminal_return=missing_terminal_return,
     )
 
     # --- Compute PnL ---
@@ -201,6 +203,9 @@ def run_trading_pipeline(
         "start_date": perf.get("start_date"),
         "end_date": perf.get("end_date"),
         "fallback": False,
+        "return_source": "total_return" if "total_return" in prices else "adj_close_pct_change",
+        "missing_terminal_return_policy": missing_terminal_return,
+        "terminal_return_imputations": int(execution_ledger.get("terminal_return_imputations", pd.Series(dtype=int)).sum()),
     }
     # Carry forward signal_col from portfolio metadata if available
     portfolio_meta_path = (

@@ -91,7 +91,7 @@ class RelativeValueScorecard:
             
             # Simulate mean-reversion trades
             # Entry: when |z-score| > 2, Exit: when z-score crosses 0
-            returns = group[price_col].pct_change()
+            returns = group[price_col].pct_change(fill_method=None)
             z_score = apply_direction(group[signal_col], meta.direction)
             
             position = 0  # 0 = no position, +1 = long, -1 = short

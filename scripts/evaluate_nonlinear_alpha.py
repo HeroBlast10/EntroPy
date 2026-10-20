@@ -37,18 +37,17 @@ from quant_platform.core.alpha_models.nonlinear_alpha import (
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--factors", type=Path, default=ROOT / "data/factors/factors.parquet")
-    parser.add_argument("--prices", type=Path, default=ROOT / "data/prices/prices.parquet")
-    parser.add_argument("--universe", type=Path, default=ROOT / "data/universe/universe.parquet")
+    parser.add_argument("--config", type=Path, default=ROOT / "config/wrds_research.yaml")
+    parser.add_argument("--factors", type=Path)
+    parser.add_argument("--prices", type=Path)
+    parser.add_argument("--universe", type=Path)
     parser.add_argument(
         "--fundamentals",
         type=Path,
-        default=ROOT / "data/fundamentals/fundamentals.parquet",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT / "data/experiments/nonlinear_alpha",
     )
     parser.add_argument("--models", nargs="+", choices=["lightgbm", "mlp"], default=["lightgbm", "mlp"])
     parser.add_argument("--horizon", type=int, default=1)
@@ -70,12 +69,27 @@ def _parse_args() -> argparse.Namespace:
         help="Reproducible sample from the expanding history; 0 uses every row.",
     )
     parser.add_argument("--seed", type=int, default=20260726)
+    parser.add_argument("--features", nargs="+")
+    parser.add_argument("--start")
+    parser.add_argument("--end")
+    parser.add_argument("--allow-restated-fundamentals", action="store_true")
+    parser.add_argument("--missing-terminal-return", choices=["raise", "total_loss", "zero_return"])
     parser.add_argument(
         "--allow-non-pit-research",
         action="store_true",
-        help="Explicitly allow research on data without point-in-time provenance.",
+        help="Deprecated alias for --allow-restated-fundamentals; NEVER waives universe/identity checks.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    import yaml
+    args.settings = yaml.safe_load(args.config.read_text(encoding="utf-8"))
+    for key in ("factors", "prices", "universe", "fundamentals", "output"):
+        if getattr(args, key) is None:
+            setattr(args, key, ROOT / args.settings["paths"][key])
+    args.features = args.features or args.settings["features"]
+    args.start = args.start or args.settings["date_range"]["start"]
+    args.end = args.end or args.settings["date_range"]["end"]
+    args.missing_terminal_return = args.missing_terminal_return or args.settings["data_contract"]["missing_terminal_return"]
+    return args
 
 
 def _fingerprint(path: Path) -> dict[str, object]:
@@ -120,30 +134,22 @@ def _validate_point_in_time_contract(
     feature_cols: list[str],
     universe: pd.DataFrame,
 ) -> None:
-    if args.allow_non_pit_research:
-        print("WARNING: explicitly allowing non-PIT research inputs", flush=True)
-        return
     from quant_platform.core.data.universe import require_point_in_time_universe
 
     require_point_in_time_universe(universe, context="non-linear alpha research")
-    fundamental_features = {
-        "EARNINGS_YIELD", "BOOK_TO_MARKET", "GROSS_PROFITABILITY",
-        "ASSET_GROWTH", "ACCRUALS", "PIOTROSKI_F8",
-    }
+    from quant_platform.core.data.research_contract import FUNDAMENTAL_FEATURES, require_financial_vintage
+    fundamental_features = FUNDAMENTAL_FEATURES
     if fundamental_features.intersection(feature_cols):
-        from quant_platform.core.data.fundamentals import (
-            require_point_in_time_fundamentals,
-        )
-
         fundamentals = pd.read_parquet(args.fundamentals)
-        require_point_in_time_fundamentals(
-            fundamentals,
-            context="non-linear alpha research",
-        )
+        require_financial_vintage(fundamentals, feature_cols, allow_restated=(
+            args.allow_non_pit_research or getattr(args, "allow_restated_fundamentals", False)))
 
 
 def main() -> None:
     args = _parse_args()
+    from quant_platform.core.utils.provenance import git_dirty, WRDS_CODE_PATHS
+    if args.settings["data_contract"].get("require_frozen_code", True) and git_dirty(ROOT, paths=WRDS_CODE_PATHS) is not False:
+        raise ValueError("Commit tracked source changes before WRDS evaluation (require_frozen_code)")
     if len(set(args.models)) != len(args.models):
         raise ValueError("--models must not contain duplicates")
     if (
@@ -163,7 +169,7 @@ def main() -> None:
 
     price_schema = set(pq.ParquetFile(args.prices).schema.names)
     price_columns = [
-        col for col in ("date", "ticker", "adj_close", "close")
+        col for col in ("date", "ticker", "permno", "adj_close", "close", "total_return", "is_terminal", "is_tradable")
         if col in price_schema
     ]
     if not {"date", "ticker"}.issubset(price_columns) or not {
@@ -171,6 +177,12 @@ def main() -> None:
     }.intersection(price_columns):
         raise ValueError("Price parquet must contain date, ticker and adj_close or close")
     prices = pd.read_parquet(args.prices, columns=price_columns)
+    from quant_platform.core.data.research_contract import require_wrds_identity
+    require_wrds_identity(universe, factors, prices)
+    if pd.Timestamp(args.end) > prices.date.max():
+        raise ValueError("Requested end exceeds WRDS price coverage")
+    factors = factors.loc[pd.to_datetime(factors.date).between(args.start, args.end)].copy()
+    prices = prices.loc[pd.to_datetime(prices.date).between(args.start, args.end)].copy()
     factor_dates = pd.DatetimeIndex(pd.to_datetime(factors["date"]).unique()).sort_values()
     schema_offset = args.n_splits * args.validation_days + args.horizon
     if len(factor_dates) <= schema_offset:
@@ -185,10 +197,11 @@ def main() -> None:
         tradable_factors.loc[
             pd.to_datetime(tradable_factors["date"]) < feature_schema_cutoff
         ],
+        feature_cols=args.features,
         min_coverage=0.80,
         return_diagnostics=True,
     )
-    if "MOM_12_1M" in factors.columns and "MOM_12_1M" not in feature_cols:
+    if "MOM_12_1M" in args.features and "MOM_12_1M" not in feature_cols:
         raise ValueError("MOM_12_1M is not usable on the locked training schema")
     # Validate before touching the filesystem. The previous ordering wrote the
     # diagnostics first, so any later contract violation overwrote a previous
@@ -206,7 +219,12 @@ def main() -> None:
         feature_cols=feature_cols,
         horizon=args.horizon,
         min_feature_coverage=0.0,
+        missing_terminal_return=args.missing_terminal_return,
     )
+    label_audit = {"terminal_settled_rows": int(panel.label_terminal_settled.sum()),
+                   "terminal_imputed_rows": int(panel.label_terminal_imputed.sum()),
+                   "missing_labels": int(panel.forward_return.isna().sum()),
+                   "missing_terminal_return_policy": args.missing_terminal_return}
     del factors, prices, universe, tradable_factors
     gc.collect()
     directions, _ = infer_factor_metadata(feature_cols)
@@ -269,7 +287,8 @@ def main() -> None:
     first_prediction = model_oof[first_model]
     validation_keys = first_prediction[["date", "ticker"]]
     common = validation_keys.merge(
-        panel[["date", "ticker", "forward_return", "target", *feature_cols]],
+        panel[["date", "ticker", "forward_return", "target", "label_end",
+               "label_terminal_settled", "label_terminal_imputed", *feature_cols]],
         on=["date", "ticker"],
         how="inner",
         validate="one_to_one",
@@ -356,12 +375,14 @@ def main() -> None:
 
     output_oof_cols = [
         "date", "ticker", "forward_return", "target", "fold",
+        "label_end", "label_terminal_settled", "label_terminal_imputed",
         *[f"{model}_alpha" for model in args.models],
         "equal_weight_alpha",
     ]
     if "MOM_12_1M" in common.columns:
         output_oof_cols.append("MOM_12_1M")
-    common[output_oof_cols].to_parquet(args.output / "oof_predictions.parquet", index=False)
+    common["permno"] = common.ticker.str.removeprefix("PERMNO:").astype("int64")
+    common[[*output_oof_cols, "permno"]].to_parquet(args.output / "oof_predictions.parquet", index=False)
     comparison.to_csv(args.output / "alpha_comparison.csv", index=False)
     pd.concat(daily_ic_parts, axis=1).to_csv(args.output / "daily_rank_ic.csv", index_label="date")
     pd.DataFrame(delta_rows).to_csv(args.output / "paired_ic_delta.csv", index=False)
@@ -378,6 +399,9 @@ def main() -> None:
         encoding="utf-8",
     )
     run_metadata = {
+        "config": _fingerprint(args.config),
+        "period": {"start": args.start, "end": args.end},
+        "label_audit": label_audit,
         "inputs": {
             "factors": _fingerprint(args.factors),
             "prices": _fingerprint(args.prices),
@@ -394,6 +418,9 @@ def main() -> None:
         "models": model_configs,
         "provenance": {
             "git_head": _git_head(),
+            "git_dirty": git_dirty(ROOT, paths=WRDS_CODE_PATHS),
+            "code_scope": list(WRDS_CODE_PATHS),
+            "reproducible_from_commit": bool(_git_head()) and git_dirty(ROOT, paths=WRDS_CODE_PATHS) is False,
             "python": sys.version,
             "platform": platform.platform(),
             "package_versions": _package_versions((
@@ -401,6 +428,9 @@ def main() -> None:
                 "lightgbm", "torch",
             )),
             "allow_non_pit_research": bool(args.allow_non_pit_research),
+            "allow_restated_fundamentals": bool(args.allow_non_pit_research or args.allow_restated_fundamentals),
+            "membership_is_point_in_time": True,
+            "primary_key": "permno",
         },
         "evaluation": {
             "return_horizon_days": args.horizon,

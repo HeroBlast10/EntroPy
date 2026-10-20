@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from quant_platform.core.signals.base import FactorBase, FactorMeta
+from quant_platform.core.data.returns import trailing_total_return
 
 
 # ===================================================================
@@ -33,7 +34,7 @@ from quant_platform.core.signals.base import FactorBase, FactorMeta
 
 def _pct_return(series: pd.Series, period: int) -> pd.Series:
     """Simple percentage return over *period* rows."""
-    return series.pct_change(periods=period)
+    return series.pct_change(periods=period, fill_method=None)
 
 
 def _rolling_max_drawdown(series: pd.Series, window: int) -> pd.Series:
@@ -64,7 +65,7 @@ class Mom1M(FactorBase):
         if _feature_cache is not None:
             return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
+        return trailing_total_return(df, period)
 
 
 class Mom3M(FactorBase):
@@ -84,7 +85,7 @@ class Mom3M(FactorBase):
         if _feature_cache is not None:
             return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
+        return trailing_total_return(df, period)
 
 
 class Mom6M(FactorBase):
@@ -104,7 +105,7 @@ class Mom6M(FactorBase):
         if _feature_cache is not None:
             return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
+        return trailing_total_return(df, period)
 
 
 class Mom12_1M(FactorBase):
@@ -131,9 +132,7 @@ class Mom12_1M(FactorBase):
         df = prices.sort_values(["ticker", "date"])
         # Base-class lagging then gives P[t-lag] / P[t-period] - 1,
         # i.e. the classic 12-minus-1-month formation return.
-        return df.groupby("ticker")["adj_close"].transform(
-            lambda s: _pct_return(s, formation_period)
-        )
+        return trailing_total_return(df, formation_period)
 
 
 class STR1W(FactorBase):
@@ -156,7 +155,7 @@ class STR1W(FactorBase):
         if _feature_cache is not None:
             return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
+        return trailing_total_return(df, period)
 
 
 class STR1M(FactorBase):
@@ -178,7 +177,7 @@ class STR1M(FactorBase):
         if _feature_cache is not None:
             return _feature_cache.get(f"ret_{period}d")
         df = prices.sort_values(["ticker", "date"])
-        return df.groupby("ticker")["adj_close"].transform(lambda s: _pct_return(s, period))
+        return trailing_total_return(df, period)
 
 
 class MomPath(FactorBase):
@@ -206,7 +205,7 @@ class MomPath(FactorBase):
         df = prices.sort_values(["ticker", "date"])
 
         def _path(s: pd.Series) -> pd.Series:
-            ret = s.pct_change(periods=window)
+            ret = s.pct_change(periods=window, fill_method=None)
             mdd = _rolling_max_drawdown(s, window).abs()
             mdd = mdd.replace(0, np.nan)
             return ret / mdd
@@ -298,7 +297,7 @@ class ResidualMomentum(FactorBase):
                 "override both lag and skip together"
             )
 
-        df = prices[["date", "ticker", "adj_close"]].copy()
+        df = prices.copy()
         if "market_cap" in prices.columns:
             df["market_cap"] = prices["market_cap"]
         df["date"] = pd.to_datetime(df["date"])
@@ -307,8 +306,7 @@ class ResidualMomentum(FactorBase):
         df = df.sort_values(["ticker", "date"])
 
         ret = (
-            df.groupby("ticker")["adj_close"]
-            .pct_change()
+            trailing_total_return(df)
             .replace([np.inf, -np.inf], np.nan)
         )
         df["ret"] = ret
@@ -403,7 +401,9 @@ class OvernightReturn1M(FactorBase):
     flow concentrated near US open, this signal is a clean proxy of demand
     pressure and remains tradable.
 
-    The signal is the trailing 21-day mean of daily overnight log returns.
+    The signal is the trailing 21-day arithmetic mean of distribution-inclusive
+    overnight returns. CIZ uses (1+total_return)*open/close-1: splits cancel,
+    cash distributions belong to overnight, intraday is close/open-1.
     Direction is +1 (higher overnight return → higher next-period return).
     """
 
@@ -430,20 +430,12 @@ class OvernightReturn1M(FactorBase):
         if "open" not in prices.columns:
             return pd.Series(np.nan, index=prices.index, dtype=float)
 
-        df = prices[["date", "ticker", "open", "close"]].copy()
-        if "adj_factor" in prices.columns:
-            df["adj_factor"] = prices["adj_factor"]
-        else:
-            df["adj_factor"] = 1.0
+        from quant_platform.core.data.returns import overnight_total_return
+        df = prices.copy()
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values(["ticker", "date"])
 
-        # Apply same adj factor to open & close so overnight return is split-clean
-        df["adj_open"] = df["open"] * df["adj_factor"]
-        df["adj_close_raw"] = df["close"] * df["adj_factor"]
-        df["prev_adj_close"] = df.groupby("ticker")["adj_close_raw"].shift(1)
-        df["overnight_ret"] = df["adj_open"] / df["prev_adj_close"] - 1.0
-        df["overnight_ret"] = df["overnight_ret"].replace([np.inf, -np.inf], np.nan)
+        df["overnight_ret"] = overnight_total_return(df)
 
         avg = (
             df.groupby("ticker")["overnight_ret"]

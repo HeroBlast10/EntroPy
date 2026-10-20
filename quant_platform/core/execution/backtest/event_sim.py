@@ -53,8 +53,11 @@ class BacktestConfig:
 
     # --- Capital ---
     initial_capital: float = 1e6
+    missing_terminal_return: str = "raise"
 
     def __post_init__(self) -> None:
+        if self.missing_terminal_return not in {"raise", "total_loss", "zero_return"}:
+            raise ValueError("Invalid missing_terminal_return policy")
         if self.rebalance_freq not in {"D", "W", "M"}:
             raise ValueError("rebalance_freq must be D, W, or M")
         if self.signal_lag < 0:
@@ -200,7 +203,12 @@ class VectorizedBacktest:
         return_wide = prices.pivot_table(
             index="date", columns=price_ticker, values=return_col, aggfunc="last"
         ).reindex(index=dates, columns=tickers)
-        ret_wide = return_wide.pct_change(fill_method=None)
+        ret_wide = (prices.pivot(index="date", columns=price_ticker, values="total_return")
+                    .reindex(index=dates, columns=tickers) if "total_return" in prices
+                    else return_wide.pct_change(fill_method=None))
+        self._terminal_mat = (prices.pivot(index="date", columns=price_ticker, values="is_terminal")
+                              .reindex(index=dates, columns=tickers).fillna(False).to_numpy(dtype=bool)
+                              if "is_terminal" in prices else np.zeros_like(ret_wide, dtype=bool))
         ret_mat = ret_wide.values
         close_mat = close_wide.values
 
@@ -442,18 +450,29 @@ class VectorizedBacktest:
         pending = np.zeros(N, dtype=bool)
         previous_nav = float(self.config.initial_capital)
         total_cost_bps = 0.0
+        terminal = getattr(self, "_terminal_mat", np.zeros((T, N), dtype=bool))
+        terminated = np.zeros(N, dtype=bool)
 
         for t in range(T):
             close_today = close_mat[t]
-            day_return = np.nan_to_num(ret_mat[t], nan=0.0)
+            day_return = ret_mat[t].copy()
+            missing = terminal[t] & (np.abs(position_values) > 1e-10) & np.isnan(day_return)
+            if missing.any():
+                from quant_platform.core.data.returns import terminal_return_value
+                day_return[missing] = terminal_return_value(self.config.missing_terminal_return)
+            day_return = np.nan_to_num(day_return, nan=0.0)
             pnl = float(np.sum(position_values * day_return))
             position_values = position_values * (1.0 + day_return)
+            position_values[terminal[t]] = 0.0
+            terminated |= terminal[t]
+            pending[terminated] = False
             nav_before_cost = previous_nav + pnl
             if nav_before_cost <= 0:
                 raise RuntimeError(f"NAV became non-positive on {dates[t]}")
 
             weights_before = position_values / nav_before_cost
             desired_values = weights_mat[t] * nav_before_cost
+            desired_values[terminated] = 0.0
             desired_shares = np.zeros(N, dtype=float)
             valid_price = np.isfinite(close_today) & (close_today > 0)
             desired_shares[valid_price] = (
