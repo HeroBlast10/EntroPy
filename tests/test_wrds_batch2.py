@@ -16,7 +16,7 @@ from quant_platform.core.signals.cross_sectional.momentum import Mom1M,_rolling_
 from quant_platform.core.signals.regime.hmm_regime import HMMTurbulenceProbability
 from quant_platform.core.alpha_models import fair_comparison as fair
 from quant_platform.core.alpha_models.nonlinear_alpha import WalkForwardConfig,expanding_date_folds
-from quant_platform.core.evaluation.factor_diagnostics import hac_summary,benjamini_hochberg,grouped_rank_ic,factor_diagnostics
+from quant_platform.core.evaluation.factor_diagnostics import hac_summary,benjamini_hochberg,grouped_rank_ic,factor_diagnostics,calendar_turnover
 
 
 def prices(n=400,stocks=3):
@@ -224,6 +224,11 @@ def test_hac_and_multiple_testing_keep_missing_dates_and_tied_samples():
     signal=pd.Series(np.arange(n,dtype=float))
     ic=grouped_rank_ic(signal,signal,pd.Series(pd.Timestamp("2024-01-02"),index=signal.index),industry)
     assert ic.eq(1).all()
+
+
+def test_turnover_counts_membership_entries_and_exits_without_observed_zero_rows():
+    dates=pd.Series(pd.to_datetime(["2024-01-02"]*2+["2024-01-03"]*2))
+    assert calendar_turnover(pd.Series([.5,-.5,.5,-.5]),dates,pd.Series([1,2,3,4]))==1
 
 
 def test_uniform_diagnostics_keep_raw_and_adjusted_financial_samples_paired():

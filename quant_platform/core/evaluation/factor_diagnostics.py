@@ -46,6 +46,13 @@ def daily_signal_weights(values, dates, gross=1.):
     return w.fillna(0)*gross/2
 
 
+def calendar_turnover(weights, dates, securities):
+    """Count entries/exits as zero-to-weight changes on the shared calendar."""
+    wide=pd.DataFrame({"date":dates,"security":securities,"weight":weights}).pivot(
+        index="date",columns="security",values="weight").sort_index().fillna(0.)
+    return float(wide.diff().abs().sum(axis=1).iloc[1:].mean()/2)
+
+
 def residualize_baseline(values, dates, baseline):
     residual = pd.Series(np.nan, index=values.index)
     for _, idx in dates.groupby(dates).groups.items():
@@ -118,8 +125,7 @@ def factor_diagnostics(panel, catalog, horizons=(1,5,20,60)):
             known=(work.fwd_1.notna()|weights.eq(0)).groupby(dates).all()
             beta_sample=pd.concat([daily_pnl.where(known).rename("pnl"),market.rename("market")],axis=1).dropna()
             market_beta=float(beta_sample.pnl.cov(beta_sample.market)/beta_sample.market.var()) if len(beta_sample)>20 and beta_sample.market.var()>0 else np.nan
-            weight_changes = weights.groupby(work.permno).diff().abs()
-            turnover = float(weight_changes.groupby(dates).sum().mean()/2)
+            turnover = calendar_turnover(weights,dates,work.permno)
             if variant == "raw":
                 by_industry = pd.DataFrame({"date":dates,"industry":work.decision_industry,"weight":weights}).groupby(["date","industry"], observed=True).weight.sum()
                 for industry, net in by_industry.groupby(level="industry"):
