@@ -314,14 +314,14 @@ Verified committed test suite (Python 3.12, 2026-10-21):
 449 passed
 ```
 
+`pytest.ini` limits default discovery to `tests/`; archived experiment copies are excluded.
+
 ## Known Limitations
 
 - The default `research` data contract starts from today's US constituents and may use non-PIT yfinance fundamental snapshots. Rows are now explicitly tagged (`membership_is_point_in_time`, `is_point_in_time`) and must not be reported as survivorship-free/PIT.
 - `production` mode fails closed unless a historical membership interval file (`ticker`, `membership_start`, `membership_end`) and publication-date-based PIT fundamentals are supplied.
 - Daily OHLCV data cannot capture intraday execution and microstructure effects.
 - The factor risk model is intentionally compact compared with commercial Barra models.
-`pytest.ini` limits default discovery to `tests/`; archived experiment copies are excluded.
-
 - White Reality Check and Deflated Sharpe are lightweight approximations intended for research hygiene, not a full academic replication package.
 - Fundamental data quality depends on SimFin coverage and reporting lag assumptions.
 - CN A-share support includes configuration and cost-model hooks, but local data availability and market-specific execution rules should be validated before production use.
