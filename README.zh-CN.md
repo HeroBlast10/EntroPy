@@ -10,8 +10,8 @@ EntroPy 用于检验状态空间、市场状态、熵、均值回复与传统横
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-465%20passed-brightgreen.svg)](#测试)
-[![Factors](https://img.shields.io/badge/factors-42个注册因子-orange.svg)](#因子库)
+[![Tests](https://img.shields.io/badge/tests-449%20passed-brightgreen.svg)](#测试)
+[![Factors](https://img.shields.io/badge/factors-44个注册因子-orange.svg)](#因子库)
 
 </div>
 
@@ -24,6 +24,8 @@ WRDS 独立研究入口：`python scripts/rebuild_wrds_research.py --refresh-fun
 新流水线使用固定 PERMNO 标识、历史成分、CIZ 总收益及统一的 2025-12-31 截止日期；保留季度利润表数值，仅对年内累计现金流差分，并按当时有效的历史版本派生特征。修订版 fundq 仍明确标记为非 PIT。这次基线重跑不能直接替换旧的非线性模型头条数字。
 
 第一批 P0 修复已加入退市结算标签、ML 特征白名单及历史公司/股类市值。独立配置为 `config/wrds_research.yaml`；执行 `python scripts/rebuild_wrds_p0.py --refresh-company` 重建，详见 [P0 数据约定与验收](docs/wrds_p0.md)。
+
+第二批已迁移原有 42 个因子，并新增两个真实股数换手率因子，加入历史生效日行业诊断，以及样本一致、内层选参的 Ridge/LightGBM 对照。详见[第二批约定、运行命令与实测结果](docs/wrds_batch2.md)。完整 WRDS 回放尚未证明非线性模型在双倍成本下有稳健净收益增益。
 
 EntroPy 围绕一个更接近真实投研的问题构建：
 
@@ -63,10 +65,10 @@ EntroPy 围绕一个更接近真实投研的问题构建：
 
 | 因子类型 | 例子 | 主要用途 |
 | --- | --- | --- |
-| 横截面因子 | `MOM_12_1M`, `STR_1M`, `VOL_20D`, `ILLIQ_AMIHUD`, `BOOK_TO_MARKET`, `ROE`, `ASSET_GROWTH` | 股票排序和组合构建 |
+| 横截面因子 | `MOM_12_1M`, `STR_1M`, `VOL_20D`, `ILLIQ_AMIHUD`, `BOOK_TO_MARKET`, `GROSS_PROFITABILITY`, `ASSET_GROWTH`, `SHARE_TURNOVER_20D/60D` | 股票排序和组合构建 |
 | 时间序列因子 | `KF_VELOCITY`, `KF_TREND_STRENGTH`, `SPECTRAL_ENTROPY_60D`, `HURST_60D`, rolling skew/kurtosis | 单资产状态、趋势和噪声特征 |
-| Regime 因子 | `HMM_TURBULENCE_PROB` | 市场状态感知的因子配置和风险暴露控制 |
-| Relative value | `OU_ZSCORE` | 均值回复质量和价差风格诊断 |
+| Regime 因子 | `HMM_TURBULENCE_PROB` | 单证券动荡概率及因子研究上下文 |
+| Relative value | `OU_ZSCORE` | 单证券均值回复诊断 |
 
 每个因子都有 `direction`、`category`、`signal_type`、lookback、lag 和 description 元数据。低波、低资产增长等负向因子会先被翻转成“高值更好”的统一信号，再进入评估、组合和 ML 主流程。
 
@@ -254,7 +256,7 @@ quant_platform/
 ├── experiments/                # 实验 YAML 配置
 ├── notebooks/                  # ★ factor_research_walkthrough.ipynb（端到端演示）
 ├── scripts/                    # CLI 入口
-├── tests/                      # 297 个单元和回归测试
+├── tests/                      # 449 个单元和回归测试
 └── docs/                       # 设计文档 + 因子词典（初学者版）
 ```
 
@@ -297,10 +299,10 @@ python -m compileall quant_platform scripts
 pytest -q
 ```
 
-最近验证结果（Python 3.12，2026-10-14）：
+已提交测试集的验证结果（Python 3.12，2026-10-21）：
 
 ```text
-297 passed
+449 passed
 ```
 
 ## 已知限制
@@ -308,6 +310,8 @@ pytest -q
 - 默认 US 股票池用动态市值和流动性过滤近似 large-cap index，不是官方历史 S&P 500 成分股。
 - 日频 OHLCV 无法捕捉日内执行和微观结构细节。
 - 因子风险模型相对商业 Barra 模型更紧凑。
+`pytest.ini` 将默认发现范围限制在 `tests/`，避免重复收集历史实验副本。
+
 - 完整 CSCV 和 Hansen SPA 为研究卫生检查工具，不是完整学术复现包。
 - 基本面数据质量依赖 SimFin 覆盖和报告滞后假设。
 - CN A 股支持包含配置和成本模型接口，但生产使用前仍需验证本地数据可得性和市场特有执行规则。

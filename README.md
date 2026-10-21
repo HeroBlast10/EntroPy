@@ -10,8 +10,8 @@ EntroPy tests whether state-space, regime, entropy, mean-reversion, and classic 
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-465%20passed-brightgreen.svg)](#testing)
-[![Factors](https://img.shields.io/badge/factors-42%20registered-orange.svg)](#signal-library)
+[![Tests](https://img.shields.io/badge/tests-449%20passed-brightgreen.svg)](#testing)
+[![Factors](https://img.shields.io/badge/factors-44%20registered-orange.svg)](#signal-library)
 
 </div>
 
@@ -24,6 +24,8 @@ The isolated WRDS pipeline is available with `python scripts/rebuild_wrds_resear
 CRSP research uses stable PERMNO aliases, dated S&P 500 membership, direct CIZ total returns and a common 2025-12-31 cutoff. Quarterly income is preserved, YTD cash flows are differenced, and derived fundamentals use versions eligible at each event. Restated fundq remains explicitly non-PIT. These baseline reruns do not replace the earlier nonlinear-model headline results.
 
 The first P0 batch adds terminal-aware ML labels, explicit feature allowlists and historical company/share-class valuation under `config/wrds_research.yaml`. Rebuild with `python scripts/rebuild_wrds_p0.py --refresh-company`; see [P0 contracts and verification](docs/wrds_p0.md).
+
+The second WRDS batch migrates all 42 original factors, adds two true share-turnover factors, and introduces effective-dated industry diagnostics and nested Ridge/LightGBM comparisons on identical samples. See [second-batch contracts, commands and measured results](docs/wrds_batch2.md). The completed WRDS comparison has not established a robust net nonlinear increment under doubled costs.
 
 EntroPy is built around one practical quant research question:
 
@@ -50,7 +52,7 @@ The platform moves beyond "best-looking backtests" toward a production research 
 | Area | Capabilities |
 | --- | --- |
 | Data layer | US/CN market calendar support, dynamic universe filters, point-in-time price and fundamental alignment, benchmark loading |
-| Signal library | 42 registered cross-sectional, time-series, regime, and relative-value factors |
+| Signal library | 44 registered cross-sectional, time-series, regime, and relative-value factors |
 | Effective signal | `direction -> winsorize -> neutralize -> z-score -> rank` shared by evaluation, portfolio, ML, and reporting |
 | Single-factor research | 1/5/10/20d IC and RankIC, **NW HAC t-stat**, IC decay + **half-life**, quintile monotonicity, turnover, break-even cost, **long/short leg attribution**, **cross-section stability**, capacity, OOS stability |
 | Multiple testing | Benjamini-Hochberg FDR, Bonferroni, **Hansen SPA test** (superior to White RC), Deflated Sharpe, **full combinatorial CSCV** |
@@ -64,17 +66,17 @@ The platform moves beyond "best-looking backtests" toward a production research 
 | **Production Readiness** | **7-dim PRS (0-100), Factor Discovery Tearsheet (HTML), Decision Story Report (HTML)** |
 | Experiments | YAML configs for factor sets, combiners, costs, walk-forward, benchmark, and capacity settings |
 
-## Signal Library (42 Registered Factors)
+## Signal Library (44 Registered Factors)
 
 | Signal Type | Examples | Primary Use |
 | --- | --- | --- |
 | Momentum | `MOM_12_1M`, `STR_1M`, `MOM_PATH`, **`RESID_MOM_12_1M`**, **`OVERNIGHT_RET_21D`** | Trend, reversal, and microstructure signals |
 | Volatility | `VOL_20D`, `IDIOVOL`, `TAIL_RISK`, `REALIZED_JUMP`, `VOL_OF_VOL` | Risk and tail-risk cross-section |
-| Liquidity | `ILLIQ_AMIHUD`, `SPREAD_HL`, `PRICE_IMPACT`, `ABNORMAL_VOLUME` | Liquidity premium and market impact |
+| Liquidity | `ILLIQ_AMIHUD`, `SPREAD_HL`, `PRICE_IMPACT`, `ABNORMAL_VOLUME`, `SHARE_TURNOVER_20D/60D` | Liquidity premium and market impact |
 | Value / Quality | `BOOK_TO_MARKET`, `EARNINGS_YIELD`, `GROSS_PROFITABILITY`, `ASSET_GROWTH`, **`ACCRUALS`**, **`PIOTROSKI_F8`** | Fundamental screening |
 | Time-series | `KF_VELOCITY`, `KF_TREND_STRENGTH`, `SPECTRAL_ENTROPY_60D`, `HURST_60D`, rolling skew/kurtosis | Per-asset latent state and trend/noise features |
-| Regime | `HMM_TURBULENCE_PROB` | Market-state-aware factor allocation and exposure control |
-| Relative value | `OU_ZSCORE` | Mean-reversion quality and spread-style diagnostics |
+| Regime | `HMM_TURBULENCE_PROB` | Per-security turbulence context for factor research |
+| Relative value | `OU_ZSCORE` | Single-security mean-reversion diagnostics |
 
 Factor metadata includes `direction`, `category`, `signal_type`, lookback, lag, and description. Negative-direction factors, such as low volatility or low asset growth, are flipped into a "higher is better" effective signal before evaluation or portfolio use.
 
@@ -242,7 +244,7 @@ quant_platform/
 ├── experiments/                # Experiment YAML configs
 ├── notebooks/                  # ★ factor_research_walkthrough.ipynb (end-to-end demo)
 ├── scripts/                    # CLI entry points
-├── tests/                      # 297 unit and regression tests
+├── tests/                      # 449 unit and regression tests
 └── docs/                       # Design docs + Factor Dictionary for Beginners
 ```
 
@@ -306,10 +308,10 @@ python -m compileall quant_platform scripts
 pytest -q
 ```
 
-Latest verified result (Python 3.12, 2026-10-14):
+Verified committed test suite (Python 3.12, 2026-10-21):
 
 ```text
-297 passed
+449 passed
 ```
 
 ## Known Limitations
@@ -318,6 +320,8 @@ Latest verified result (Python 3.12, 2026-10-14):
 - `production` mode fails closed unless a historical membership interval file (`ticker`, `membership_start`, `membership_end`) and publication-date-based PIT fundamentals are supplied.
 - Daily OHLCV data cannot capture intraday execution and microstructure effects.
 - The factor risk model is intentionally compact compared with commercial Barra models.
+`pytest.ini` limits default discovery to `tests/`; archived experiment copies are excluded.
+
 - White Reality Check and Deflated Sharpe are lightweight approximations intended for research hygiene, not a full academic replication package.
 - Fundamental data quality depends on SimFin coverage and reporting lag assumptions.
 - CN A-share support includes configuration and cost-model hooks, but local data availability and market-specific execution rules should be validated before production use.

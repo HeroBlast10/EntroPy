@@ -54,6 +54,11 @@ Feature coverage/variance gates are locked before the first INNER validation
 period. Both information blocks predict identical securities/dates, retain
 unlabeled inference rows and use identical capped training samples. Missing
 feature ranks use a fixed zero midpoint; no full-sample imputer is fitted.
+Shared training sampling orders on date, common price features and training
+target, using the same predictor union only to resolve exact ties. Identifiers
+and provenance are excluded from both levels. Remaining ties have identical
+predictors and targets in every information block. Relabeling security IDs
+therefore cannot change the fitted data, even with capped sampling.
 
 The primary task is 20 sessions. Each outer expanding fold contains a purged
 inner validation window; parameter choice never accesses outer labels. Three
@@ -68,7 +73,9 @@ Equal-weight combinations and fixed momentum/profitability baselines use the
 same OOF prediction universe. Rebalance every 20/5 sessions respectively,
 with gross target at most 1, 1.5% stock and 3% issuer gross target caps, $1m
 capital and 10% ADV execution limits. Twofold cost stress is a full execution
-replay. Missing SIVB/SBNY payoffs require explicit total-loss/zero-return runs;
+replay using the declared `CostModel` defaults, including doubled borrowing
+costs. These are simulated cost assumptions, not observed broker fills or a
+current broker tariff schedule. Missing SIVB/SBNY payoffs require explicit total-loss/zero-return runs;
 the sensitivity uses frozen primary choices. Neither is an observed payoff.
 The tape ends 2025-12-31 and the last marked period may be a shorter stub.
 
@@ -102,3 +109,124 @@ Main outputs: `factor_catalog.csv`, `factors.parquet`, `diagnostics/`, nested
 `trial_registry.json`, `locked_feature_schema.csv`, `fold_audit.csv`, complete
 OOF predictions, IC and paired net-return comparisons, baseline/stress execution
 records and `batch2_acceptance.json`. Earlier results are not overwritten.
+
+## Measured diagnostic results (2026-10-21)
+
+The rebuilt panel contains 2,903,815 observed security/date rows and 2,021,564
+eligible research rows. All 44 registered factors have usable histories;
+effective-dated industry coverage is 100% among eligible rows. The 224-row
+scorecard covers the four declared horizons and matched financial ablations.
+Financial coverage in the 2010–2025 eligible panel is:
+
+| Factor | Coverage |
+| --- | ---: |
+| ASSET_GROWTH | 97.56% |
+| GROSS_PROFITABILITY | 98.67% |
+| ACCRUALS | 98.48% |
+| BOOK_TO_MARKET | 99.72% |
+| EARNINGS_YIELD | 99.01% |
+| PIOTROSKI_F8 | 83.98% |
+
+These coverage figures do not upgrade revised fundq into a strict-PIT product.
+At 20 sessions no factor/variant passes the exploratory BH 5% threshold across
+all 224 comparisons. Ten comparisons pass at one session; this does not establish
+profitability after costs at that frequency. Matched industry/size adjustment
+raises ACCRUALS' 20-session IC from 0.00347 to 0.00925 (HAC t=2.74), but its
+multiple-testing-adjusted result still does not pass the declared threshold.
+
+Redundancy diagnostics identify essentially identical raw daily ranks for the
+two skewness implementations, the two kurtosis implementations and MOM_1M versus
+STR_1M. The last pair has opposite declared alpha directions. High redundancy
+also appears for MOM_6M/MOM_PATH and DOWNVOL_60D/TAIL_RISK. These are candidates
+for a separately frozen, training-only ablation; they are retained in the
+predeclared model comparison instead of removed after viewing OOF outcomes.
+
+The model schema locks on 2021-04-30. Four outer folds run from 2021-12-27 through
+2025-12-31, each with 252 prediction sessions. Each information block has 506,738
+OOF security/date predictions per horizon, using 38 price/volume predictors or
+44 predictors including six financial features. The 20-session LightGBM minus
+Ridge IC delta with financials is 0.00056, with a paired 95% interval of
+[-0.01529, 0.01666]. Financials minus price-only has an IC delta of -0.00284 for
+Ridge and -0.00108 for LightGBM; both paired intervals cross zero. These results
+do not support a demonstrated nonlinear or financial-information increment.
+
+Default pytest discovery is restricted to `tests/`. An ignored experiment
+snapshot contains 47 duplicate Tier A tests and previously inflated whole-tree
+counts; it is no longer collected. The committed test suite contains 449
+distinct test cases, including 31 new second-batch cases. Licensed row-level
+inputs and generated model artifacts remain under ignored `data/wrds/`.
+
+## Executed primary results
+
+The total-loss research scenario for the two missing terminal payoffs produces
+these results over 2021-12-27–2025-12-31 (1,008 marked sessions). This is a
+historical OOF execution comparison, with $1m starting capital and gross target
+at most one. Annualized returns below include simulated transaction and borrow
+costs; the doubled-cost column comes from a separate execution replay.
+
+| Horizon | Information | Model | Net annual return, base | Net annual return, 2x cost | Base net Sharpe |
+| --- | --- | --- | ---: | ---: | ---: |
+| 20 sessions | Price/volume | ridge | 0.873% | -0.680% | 0.2177 |
+| 20 sessions | Price/volume | lightgbm | 0.777% | -0.700% | 0.2038 |
+| 20 sessions | Price/volume + financial | ridge | -0.155% | -1.628% | -0.0091 |
+| 20 sessions | Price/volume + financial | lightgbm | -0.892% | -2.168% | -0.1611 |
+| 5 sessions | Price/volume | ridge | 0.003% | -4.529% | 0.0298 |
+| 5 sessions | Price/volume | lightgbm | -1.438% | -5.803% | -0.2333 |
+| 5 sessions | Price/volume + financial | ridge | -0.428% | -4.643% | -0.0480 |
+| 5 sessions | Price/volume + financial | lightgbm | -2.373% | -6.286% | -0.4121 |
+
+Fixed 20-session momentum has base net annual return 0.087% and net Sharpe
+0.0540; fixed gross profitability has -1.889% and -0.2939 respectively.
+The fixed shuffled Ridge controls lose money at both horizons and costs.
+No tested Ridge/LightGBM information block remains profitable at doubled costs.
+Thus the repairs improve data coverage, definitions and auditability without
+establishing a robust profitable strategy. The earlier legacy net-Sharpe 1.09
+headline must not be relabeled as a result of this WRDS experiment.
+
+All eight primary paired net-return intervals include zero. In the financial
+20-session comparison, LightGBM minus Ridge has mean daily net-return delta
+-0.292 basis points, with a paired 95% interval [-1.731, 1.023] basis points.
+These intervals describe the declared historical experiment, not a future
+performance guarantee.
+
+A final synthetic audit exposed an identifier dependence when price/target
+sampling keys tie but financial predictors differ. The added secondary keys
+and regression test fix that edge case. On the real 2,021,564-row panel there
+are **zero** duplicate date/common-price-feature keys, even without target in
+the key. Thus the recorded OOF selections and model results (frozen at
+`35ddc5f`) are unchanged by this subsequent boundary fix; their original source
+metadata are preserved. `sampling_tie_audit.json` records this check locally.
+
+## Final acceptance and remaining work
+
+Both terminal policies complete all 36 predeclared replays, for **72** formal
+books in total, in addition to 36 smoke replays. Parameter choices for both
+zero-return horizons exactly match the frozen primary 20-session choices.
+The largest absolute change in annual net return across corresponding books
+is 0.335 percentage points. Every Ridge/LightGBM block remains negative
+at doubled costs under both policies. These scenarios are assumptions for the
+two missing payoffs, not observations or proven bounds on the true outcome.
+
+The final verifier passes factor/part/input hashes, effective industry dates,
+seven actual-CRSP future-perturbation/prefix checks, purged label boundaries,
+identical training and prediction keys, transaction-cost aggregation and the
+daily net-NAV identity. The maximum executed ADV participation across both
+policies is 0.0010300153 (0.1030%), below the 10% execution limit. Separate
+checks on all books verify tradable-only integer-share fills, gross target at
+most 1, maximum stock target 0.5% and issuer gross target 1.0%, below the
+configured 1.5% and 3% caps. These are target constraints; realized exposure
+may drift between rebalances.
+
+`batch2_acceptance.json`, `terminal_policy_sensitivity.csv`, the paired
+IC/net-return CSVs, `sampling_tie_audit.json` and `batch2_completion.json`
+retain the full local evidence. Both policies have
+`research_increment_supported=false` and `production_admitted=false`.
+
+The next research work should first address independent positions/cash
+reconciliation, residual-order lifecycle and cost/capital replay sensitivity.
+A subsequent, separately frozen model experiment can test training-only
+redundancy pruning and industry/size-adjusted financial features. Full-history
+factor rankings must not be used to retune this already reviewed OOF period.
+More parameter search, extra models or IBES features are not supported as the
+immediate next action by this batch's evidence. A genuinely new untouched test
+period and stronger fundamental vintages remain necessary for stronger claims.

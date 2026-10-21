@@ -207,7 +207,9 @@ def test_tied_shared_sampling_key_is_invariant_to_identifier_relabeling():
     predictions=[]
     for frame in (p,changed):
         train=frame.date.lt(p.date.unique()[20]).to_numpy()
-        pred,_,_=fair.fit_predict(frame,features,train,~train,**kwargs)
+        pred,full_imp,_=fair.fit_predict(frame,features,train,~train,**kwargs)
+        _,price_imp,_=fair.fit_predict(frame,["MOM_1M"],train,~train,**kwargs)
+        assert full_imp.attrs["training_key_sha256"]==price_imp.attrs["training_key_sha256"]
         predictions.append(frame.loc[~train,["date","security"]].assign(prediction=pred)
             .sort_values(["date","security"]).prediction.to_numpy())
     np.testing.assert_allclose(*predictions,rtol=0,atol=1e-7)
@@ -237,9 +239,10 @@ def test_outer_labels_cannot_select_parameters_or_change_their_own_predictions(m
 
 
 def test_issuer_concentration_and_prediction_selection_ignore_future_labels():
-    p=prices(1,200).assign(permco=lambda f:(f.permno//2),score=lambda f:f.permno,forward_return=np.nan)
+    p=prices(1,200).assign(permco=lambda f:(f.permno//10),score=lambda f:f.permno,forward_return=np.nan)
     w=fair.issuer_capped_weights(p,"score",stock_cap=.015,issuer_cap=.03)
     assert w.abs().max()<=.015 and w.abs().groupby(p.permco).sum().max()<=.03+1e-12
+    assert w.abs().groupby(p.permco).sum().max()==pytest.approx(.03)
     assert abs(w.sum())<1e-12
     pd.testing.assert_series_equal(w,fair.issuer_capped_weights(p.assign(forward_return=1000),"score",stock_cap=.015,issuer_cap=.03))
 
