@@ -30,13 +30,20 @@ def inner_time_masks(panel, fold, inner_days):
 
 
 def fit_predict(panel, features, train_mask, test_mask, *, model, params, seeds,
-                max_rows=200000, n_jobs=4, sampling_features=None):
-    if any(is_metadata(c) for c in features):
+                max_rows=200000, n_jobs=4, sampling_features=None, sampling_tiebreak_features=None):
+    sampling_features=list(features if sampling_features is None else sampling_features)
+    tiebreak=list(sampling_features if sampling_tiebreak_features is None else sampling_tiebreak_features)
+    if any(is_metadata(c) for c in [*features,*sampling_features,*tiebreak]):
         raise ValueError("Identifiers/provenance cannot be prediction features")
+    if not set(features).issubset(set(sampling_features)|set(tiebreak)):
+        raise ValueError("Shared sampling needs common tie-break features covering every predictor")
     ids=np.flatnonzero(train_mask)
-    sampling_features=features if sampling_features is None else sampling_features
-    canonical=panel.iloc[ids][["date",*sampling_features,"target"]].reset_index(drop=True).sort_values(
-        ["date",*sampling_features,"target"],kind="mergesort").index
+    # All information blocks use the same secondary keys. After price/target
+    # ties, differing financial rows must not fall back to ticker/input order.
+    # A remaining exact tie has identical predictors and target in every block.
+    sort_keys=list(dict.fromkeys(["date",*sampling_features,"target",*tiebreak]))
+    canonical=panel.iloc[ids][sort_keys].reset_index(drop=True).sort_values(
+        sort_keys,kind="mergesort").index
     ids=_sample_training_rows(ids[canonical],max_rows,int(seeds[0]))
     test_ids=np.flatnonzero(test_mask)
     x=panel.iloc[ids][features].to_numpy(dtype=np.float32)
@@ -68,6 +75,7 @@ def nested_oof(panel, feature_blocks, directions, settings, *, horizon, frozen_c
         validation_days=settings["validation_days"],n_splits=settings["n_splits"])
     trials,choices,parts,importance_rows,fold_rows=[],{},[],[],[]
     label_end=pd.to_datetime(panel.label_end)
+    common_tiebreak=list(dict.fromkeys(c for cols in feature_blocks.values() for c in cols))
     for fold in expanding_date_folds(panel.date,wf):
         predict=panel.date.isin(fold["validation_dates"]).to_numpy()
         train=(panel.date.isin(fold["train_dates"])&panel.target.notna()&label_end.lt(fold["validation_start"])).to_numpy()
@@ -94,7 +102,7 @@ def nested_oof(panel, feature_blocks, directions, settings, *, horizon, frozen_c
                     for config_id,params in enumerate(settings["model_configs"][model]):
                         pred,imp,n=fit_predict(panel,features,inner_train,inner_valid,model=model,params=params,
                             seeds=settings["seeds"],max_rows=settings["max_train_rows"],n_jobs=settings["n_jobs"],
-                            sampling_features=settings.get("sampling_features"))
+                            sampling_features=settings.get("sampling_features"),sampling_tiebreak_features=common_tiebreak)
                         validation=panel.loc[inner_valid,["date","forward_return"]].assign(score=pred)
                         score=float(daily_rank_ic(validation,"score").mean())
                         trials.append({"horizon":horizon,"fold":fold["fold"],"block":block,"model":model,
@@ -113,7 +121,7 @@ def nested_oof(panel, feature_blocks, directions, settings, *, horizon, frozen_c
                 choices[key]=params
                 pred,imp,n=fit_predict(panel,features,train,predict,model=model,params=params,
                     seeds=settings["seeds"],max_rows=settings["max_train_rows"],n_jobs=settings["n_jobs"],
-                    sampling_features=settings.get("sampling_features"))
+                    sampling_features=settings.get("sampling_features"),sampling_tiebreak_features=common_tiebreak)
                 trials.append({"horizon":horizon,"fold":fold["fold"],"block":block,"model":model,
                     "params":params,"selected_using":"outer training refit; no outer labels in selection",
                     "train_rows_used":n,"training_key_sha256":imp.attrs["training_key_sha256"],

@@ -182,10 +182,40 @@ def test_inner_and_outer_label_end_boundaries_are_independent_and_strict():
 def test_capped_training_samples_are_shared_across_information_ablations():
     p=learning_panel()
     train=p.date.lt(p.date.unique()[30]).to_numpy(); test=~train
-    kwargs=dict(model="ridge",params={"alpha":10},seeds=[17],max_rows=50,sampling_features=["MOM_1M"])
+    kwargs=dict(model="ridge",params={"alpha":10},seeds=[17],max_rows=50,sampling_features=["MOM_1M"],
+                sampling_tiebreak_features=["MOM_1M","BOOK_TO_MARKET"])
     _,imp1,_=fair.fit_predict(p,["MOM_1M"],train,test,**kwargs)
     _,imp2,_=fair.fit_predict(p,["MOM_1M","BOOK_TO_MARKET"],train,test,**kwargs)
     assert imp1.attrs["training_key_sha256"]==imp2.attrs["training_key_sha256"]
+
+
+def test_tied_shared_sampling_key_is_invariant_to_identifier_relabeling():
+    n_days,n_assets=30,10
+    p=pd.DataFrame({"date":np.repeat(pd.bdate_range("2020-01-01",periods=n_days),n_assets),
+        "ticker":np.tile([f"PERMNO:{i}" for i in range(n_assets)],n_days),
+        "security":np.tile(np.arange(n_assets),n_days)})
+    day=p.date.factorize()[0]
+    p["MOM_1M"]=day/20
+    p["BOOK_TO_MARKET"]=np.random.default_rng(1).normal(size=len(p))
+    p["target"]=np.sin(day/3)
+    changed=p.copy()
+    changed["ticker"]=changed.security.map(lambda s:f"PERMNO:{9-s}")
+    changed=changed.sort_values(["date","ticker"]).reset_index(drop=True)
+    features=["MOM_1M","BOOK_TO_MARKET"]
+    kwargs=dict(model="ridge",params={"alpha":10},seeds=[17],max_rows=37,
+                sampling_features=["MOM_1M"],sampling_tiebreak_features=features)
+    predictions=[]
+    for frame in (p,changed):
+        train=frame.date.lt(p.date.unique()[20]).to_numpy()
+        pred,_,_=fair.fit_predict(frame,features,train,~train,**kwargs)
+        predictions.append(frame.loc[~train,["date","security"]].assign(prediction=pred)
+            .sort_values(["date","security"]).prediction.to_numpy())
+    np.testing.assert_allclose(*predictions,rtol=0,atol=1e-7)
+    train=p.date.lt(p.date.unique()[20]).to_numpy()
+    with pytest.raises(ValueError,match="tie-break"):
+        fair.fit_predict(p,features,train,~train,**{**kwargs,"sampling_tiebreak_features":None})
+    with pytest.raises(ValueError,match="Identifiers"):
+        fair.fit_predict(p,features,train,~train,**{**kwargs,"sampling_tiebreak_features":[*features,"ticker"]})
 
 
 def test_outer_labels_cannot_select_parameters_or_change_their_own_predictions(monkeypatch):
