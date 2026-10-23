@@ -1,0 +1,196 @@
+{
+  "report_date": "2026-10-23",
+  "research_code_baseline": "83bc1b5f932f2e7df173b1f31f0f19cc317b05c9",
+  "formal_model_code": "35ddc5f8f88fece0601da4f2819b2df5fd6bf4a6",
+  "data_cutoff": "2025-12-31",
+  "formal_replays": 72,
+  "smoke_replays": 36,
+  "additional_posthoc_factor_replays": 4,
+  "committed_tests": 449,
+  "last_workspace_tests": 482,
+  "last_test_date": "2026-10-21",
+  "full_test_suite_rerun_for_report": false,
+  "report_contains_aggregate_data_only": true,
+  "production_admitted": false,
+  "fundamentals_is_point_in_time": false,
+  "note": "Source hashes identify local licensed/research artifacts; row-level data and credentials are not distributed. Plot drivers are saved local inputs, not part of the formal model-code snapshot.",
+  "sources": [
+    {
+      "path": "data/wrds/repaired/fundamentals_summary.json",
+      "sha256": "82740cee2b6248088def60f3395d0600362c32a46010adcab441de84008a4a44",
+      "size_bytes": 1530
+    },
+    {
+      "path": "data/wrds/repaired/compustat_quarterly_processed.parquet",
+      "sha256": "c4264a93d7af1d11710b7581ac6b0a3e65e224c96fa413321a7bcc1d1f9b68bf",
+      "size_bytes": 66495494
+    },
+    {
+      "path": "data/wrds/p0/p0_validation.json",
+      "sha256": "0fe2764ce550091309ef516a11ac02244ffb46003c13b9f7e898824202581053",
+      "size_bytes": 896
+    },
+    {
+      "path": "data/wrds/p0/p0_acceptance.json",
+      "sha256": "ef8f73b01dcca16ff8c0dcb23f4f59227f5ea9c772b48c82f8a4108e67de2217",
+      "size_bytes": 3556
+    },
+    {
+      "path": "data/wrds/batch2/factor_catalog.csv",
+      "sha256": "f209abc4432534fabf973576d1be0f256f326aecd0e2836c8a9a79c612ba75af",
+      "size_bytes": 11721
+    },
+    {
+      "path": "data/wrds/batch2/factor_library_metadata.json",
+      "sha256": "12219d5a0a469e029f85136408d93f3a2c773e1a2bf2193b2e0ef1b2648bd117",
+      "size_bytes": 4080
+    },
+    {
+      "path": "data/wrds/batch2/diagnostics/total_loss/quality.csv",
+      "sha256": "f25a2b2b4f26e55dd5479efd9ca146b45a4daee8e20c82026d62b7f11141b2d4",
+      "size_bytes": 3520
+    },
+    {
+      "path": "data/wrds/batch2/diagnostics/total_loss/summary.csv",
+      "sha256": "646e374ea43fd588b67fbd994a8d2a27ce6e479a178da25efe6456885b563bd6",
+      "size_bytes": 58635
+    },
+    {
+      "path": "data/wrds/batch2/diagnostics/total_loss/yearly.csv",
+      "sha256": "f38eb9be6e59f76cbf62062171319aba958f20489051bef8516c5a523b81a855",
+      "size_bytes": 406023
+    },
+    {
+      "path": "data/wrds/batch2/diagnostics/total_loss/rank_correlation.csv",
+      "sha256": "2e98ad29fc201063854095b0b1286ce46f69fd9f82955ebabe9a19b825906803",
+      "size_bytes": 40538
+    },
+    {
+      "path": "data/wrds/batch2/model_comparison/total_loss/full/execution_comparison.csv",
+      "sha256": "118302326d6056e33d446a866991bb26e18667c6ac0118a8b720d695a125490a",
+      "size_bytes": 10584
+    },
+    {
+      "path": "data/wrds/batch2/model_comparison/total_loss/full/h20/run_metadata.json",
+      "sha256": "808825efe0f66d74ddf37bfa32d5f4264ce75a1715d9096d7477f7a7abb76e8f",
+      "size_bytes": 7360
+    },
+    {
+      "path": "data/wrds/batch2/model_comparison/total_loss/full/h20/fold_audit.csv",
+      "sha256": "cf267881c8cdf0a5ed54798dc476ecce35cc4a9485ff1dbfb7d29e4126365298",
+      "size_bytes": 465
+    },
+    {
+      "path": "data/wrds/batch2/model_comparison/total_loss/full/h20/paired_ic_delta.csv",
+      "sha256": "49a8ddb7e7ee712ea9e744eaf3ce7979f4bdb2df5f6248995e81fd65978dbfb8",
+      "size_bytes": 1086
+    },
+    {
+      "path": "data/wrds/batch2/model_comparison/total_loss/full/h20/paired_net_return_delta.csv",
+      "sha256": "5db300188e7c1358001527ae02d08fa864b457c841cd245f27d9785ea1ff6a87",
+      "size_bytes": 624
+    },
+    {
+      "path": "data/wrds/batch2/model_comparison/zero_return/full/execution_comparison.csv",
+      "sha256": "eb5669c09de413158cdf7be33a35a69b9a5b17b22072822825c69cf579a4909b",
+      "size_bytes": 10589
+    },
+    {
+      "path": "data/wrds/batch2/batch2_acceptance.json",
+      "sha256": "5f42b4ad229e5e27be0cf7136bf075037f7d8911abdbfa666d079f40f85be1ec",
+      "size_bytes": 4652
+    },
+    {
+      "path": "data/wrds/batch2/batch2_completion.json",
+      "sha256": "1be034969ae524a61d1125a52add8027fb186a213b409e2c4964d0a114b417e1",
+      "size_bytes": 23768
+    },
+    {
+      "path": "data/wrds/batch2/sampling_tie_audit.json",
+      "sha256": "10cc54804b413f018de15bf2e69ea5950a1c42a5da9159ad13449e6391eec603",
+      "size_bytes": 331
+    },
+    {
+      "path": "data/wrds/batch2/terminal_policy_sensitivity.csv",
+      "sha256": "5866cc443a388c209af1fd981b242d2f372ebc6841174b67a2b87505cd783617",
+      "size_bytes": 21802
+    },
+    {
+      "path": "data/wrds/batch2/final_unique_tests.console.txt",
+      "sha256": "4f50de4cf8d062136153ba6a4a0b9b5c2e72de5d9b3e6a08aa5bfd2f8f292b13",
+      "size_bytes": 3977
+    },
+    {
+      "path": "data/wrds/batch2/curve_review_20261023/performance_summary.csv",
+      "sha256": "ae9f98740c1b53339def78df486966456c4c3eba8138202db40797ba73ab3ee4",
+      "size_bytes": 3066
+    },
+    {
+      "path": "data/wrds/batch2/curve_review_20261023/run_metadata.json",
+      "sha256": "0a0fe6b873cdf862cc3fa154b0ddb737e3b67da24cd06147903784e0ee5403b7",
+      "size_bytes": 5263
+    },
+    {
+      "path": "data/wrds/batch2/curve_review_20261023/layout_metadata.json",
+      "sha256": "bec0c1f471bd6456b1ee30afdae5c7d36e030d090961735f1f42997979b4e918",
+      "size_bytes": 2313
+    },
+    {
+      "path": "data/wrds/batch2/curve_review_20261023/render_curves.py",
+      "sha256": "b5865d4808bb733661f2f1c5f9ea19aafa00d7750ec67ccc819c3c20d20b1d2a",
+      "size_bytes": 12279
+    },
+    {
+      "path": "data/wrds/batch2/curve_review_20261023/refine_layout.py",
+      "sha256": "226352a556be85755f3db498e76f282fbe55335539cb564b65bab897c2afd4a1",
+      "size_bytes": 1450
+    },
+    {
+      "path": "config/wrds_batch2.yaml",
+      "sha256": "02e9c109c77076dcf2c525a8d132eedd070ad0540e53a7b087e57fc8cb392596",
+      "size_bytes": 1797
+    },
+    {
+      "path": "docs/wrds_p0.md",
+      "sha256": "8b08418d7d075a29c1fa0d497709b250fc4c999ffedf6a8eb0049ffea459f912",
+      "size_bytes": 6341
+    },
+    {
+      "path": "docs/wrds_batch2.md",
+      "sha256": "f242be3d22fa533c421ff5cc421c9595aba7723b8f7766e37385bf29e1dae742",
+      "size_bytes": 14342
+    },
+    {
+      "path": "data/wrds/p0/terminal_label_reconciliation.csv",
+      "sha256": "98e64abd232f5c3f20421c827f3efd30676dca9f8d5ce7244cce19eedd65ec64",
+      "size_bytes": 20283
+    }
+  ],
+  "images": [
+    {
+      "path": "docs/assets/stage_20261023/models_20d_net_nav.png",
+      "sha256": "ea95e221d06a35459ae9174ef66799c367e5224963802ca6eee7a6e135801781",
+      "size_bytes": 611997
+    },
+    {
+      "path": "docs/assets/stage_20261023/models_cost_sensitivity.png",
+      "sha256": "547f4e42ccdca5314dab1af7f2ed09371478fd82ef70bf638e5b8248b41f9790",
+      "size_bytes": 318849
+    },
+    {
+      "path": "docs/assets/stage_20261023/selected_factors_daily_nav.png",
+      "sha256": "c1597852831b3e33d68b951a298c362ceabea52507028894cd7bad0ada8a6cd2",
+      "size_bytes": 514082
+    }
+  ],
+  "report_sha256": "3841b1822a0a4d15a44d3fbbc1e773143ffdcb1deacb0183e50985e461a98eae",
+  "terminal_label_audit": {
+    "terminal_records": 233,
+    "known_terminal_returns": 231,
+    "missing_terminal_returns": 2,
+    "reconciled_paths": 231,
+    "reconciled_observed_paths": 229,
+    "reconciled_assumed_paths": 2,
+    "not_in_constructible_20_session_audit": 2
+  }
+}
