@@ -1,0 +1,754 @@
+{
+  "inputs": {
+    "data\\wrds\\batch4\\ml_diagnostics_20261024\\run_metadata.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\ml_diagnostics_20261024\\run_metadata.json",
+      "size_bytes": 2229,
+      "mtime_ns": 1792833659389882800,
+      "sha256": "1d6b5a8633d6d078c5a163420f9fd2a9dff80e5b71ce878fa791ec0233a1e961"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\plan.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\plan.json",
+      "size_bytes": 108705,
+      "mtime_ns": 1792834264843711700,
+      "sha256": "9ea5ab2973cd92df07463d4f008c339b56bc82d3035d7f3096b55b529c94706f"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\training_completion.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\training_completion.json",
+      "size_bytes": 2231,
+      "mtime_ns": 1792834558943310300,
+      "sha256": "ef1a478330a223b51d6308282aa593f75a3035d300698094592a428d41fdb04b"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\model_summary.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\model_summary.csv",
+      "size_bytes": 1063,
+      "mtime_ns": 1792834558628176300,
+      "sha256": "21e514e3e2fd73649d61014613caa46c773eb4ec321819127c495adf53f0275a"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\completion.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\completion.json",
+      "size_bytes": 2829,
+      "mtime_ns": 1792837803544897000,
+      "sha256": "6f85f371144dd4072e3bb385694d1b28d3315fb7bb5d080964caba11fb9386bf"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\size_stratified_ic.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\size_stratified_ic.csv",
+      "size_bytes": 1619,
+      "mtime_ns": 1792837803443267900,
+      "sha256": "dac80d4e0561dcb81db82648dae3a20ff96429b35cb5f70a58a29f241a88b029"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\prior_model\\training_metadata.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\prior_model\\training_metadata.json",
+      "size_bytes": 2027,
+      "mtime_ns": 1792838318675102300,
+      "sha256": "2b95fa4a217c4a92e9d73a87381a2ec4ab888a330c2afd51683f89977b26f3c1"
+    },
+    "data\\wrds\\batch4\\broad_raw\\terminal_repair\\completion.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_raw\\terminal_repair\\completion.json",
+      "size_bytes": 1826,
+      "mtime_ns": 1792837142978345400,
+      "sha256": "baa42f0d0840ba1c896e719dcdcd82cb78ce10570535b6e1ca8c292e82bf94da"
+    },
+    "data\\wrds\\batch4\\alternative_raw\\ibes_unadjusted_repair\\completion.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_raw\\ibes_unadjusted_repair\\completion.json",
+      "size_bytes": 1683,
+      "mtime_ns": 1792836037568456400,
+      "sha256": "1d7dd1074980c559a1d6fb1f0890d8785a03520ca347a18c106398fddf42ff23"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\run_metadata.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\run_metadata.json",
+      "size_bytes": 2729,
+      "mtime_ns": 1792836329251544800,
+      "sha256": "b3e7493d3f23ec5adea48f91c7998415e07a063efa3d71ac61cccc9c9c2c646d"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\factor_ic.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\factor_ic.csv",
+      "size_bytes": 4208,
+      "mtime_ns": 1792836328716208400,
+      "sha256": "14706bcacbf16485d4038f20d73ebe224aae9d275bcffa25fc090080c08bf10b"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\features.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\features.parquet",
+      "size_bytes": 117428970,
+      "mtime_ns": 1792836244262282300,
+      "sha256": "a3dc6e492ace35c1dca7bf27b96c0363d553fa6096c46857d8a343f5cc3083f2"
+    },
+    "data\\wrds\\batch4\\final_pytest.txt": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\final_pytest.txt",
+      "size_bytes": 4882,
+      "mtime_ns": 1792838349062725300,
+      "sha256": "4bffee3cd234246db1b04b021dd26f8a7040445f0c4bc122ab8e2c90a96f84ed"
+    },
+    "data\\wrds\\batch4\\shared_crsp_return_audit.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\shared_crsp_return_audit.json",
+      "size_bytes": 199,
+      "mtime_ns": 1792838567984606600,
+      "sha256": "5fb1c5e2a9ba494c568970d56f465c402360376d2c3cbab900b5f72a7d7a7d32"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\prices.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\prices.parquet",
+      "size_bytes": 965144725,
+      "mtime_ns": 1792837416391390300,
+      "sha256": "a7252ed84951ce09320f3b18dca093d18ac041eb05d432942c069f673272c8ae"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\factors.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\factors.parquet",
+      "size_bytes": 659298258,
+      "mtime_ns": 1792837784342254600,
+      "sha256": "6b325387d69ee3b9258a552a11e1e56605c723f3d86e69c685740ec67fd1bcab"
+    },
+    "data\\wrds\\p0\\prices.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\p0\\prices.parquet",
+      "size_bytes": 162819630,
+      "mtime_ns": 1792499308716443100,
+      "sha256": "2a804a8f9b6826b8737797fbf2d9d2f3dfb363050c07ded5e856e18223d4a7c9"
+    },
+    "docs\\RESEARCH_EXTENSIONS_2026-10-24.md": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\RESEARCH_EXTENSIONS_2026-10-24.md",
+      "size_bytes": 24624,
+      "mtime_ns": 1792838681464096200,
+      "sha256": "0e54855a02e8d6928b79b6ccf9f56871c3b53adf3583e74acc933c3317e68f0b"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\completion.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\completion.json",
+      "size_bytes": 80,
+      "mtime_ns": 1792835951632379000,
+      "sha256": "61aa8351dfdbc9487eb161f3518245626d53de06a31e722c286bc3f5c059138e"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\performance.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\performance.csv",
+      "size_bytes": 13872,
+      "mtime_ns": 1792835951357056000,
+      "sha256": "8056c3c1fdddbc7895bda9a2a390a2852272ec7958e1b2c76eed40fcda197086"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\equal_weight_price_only\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\equal_weight_price_only\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 453780,
+      "mtime_ns": 1792835147835157800,
+      "sha256": "db8165bbdabcee9290a3a51fa771be347f3777795fba2b7c6f5e5243f67ed69c"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\equal_weight_price_only\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\equal_weight_price_only\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 454049,
+      "mtime_ns": 1792835147019649600,
+      "sha256": "4add427efafbfe351d1335ac31e8ed2fd6b39b4f29b4ee9a78163397a51e1fd2"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\equal_weight_price_plus_financial\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\equal_weight_price_plus_financial\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 453867,
+      "mtime_ns": 1792835312473504000,
+      "sha256": "5df340658322b0a6568cc566143dbdc2502999adaabf086e48e7583a7f946d08"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\equal_weight_price_plus_financial\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\equal_weight_price_plus_financial\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 453506,
+      "mtime_ns": 1792835313786431200,
+      "sha256": "e07ce45eab15e838040e23a083f77e3e78c2e27e3c2adbc2eff7eac956de4d8d"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\financial_only_ridge_prior_h120\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\financial_only_ridge_prior_h120\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 441915,
+      "mtime_ns": 1792835729873746800,
+      "sha256": "cc27881c41b5fd17a88f2c66981a87c631ffcf33539033b1af04642408ccc31f"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\financial_only_ridge_prior_h120\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\financial_only_ridge_prior_h120\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 441369,
+      "mtime_ns": 1792835733721146000,
+      "sha256": "47eb73208af72a9b6bde50ee595f2349a67eb5383f1bc2b7f4e370635ef86c85"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\financial_only_ridge_prior_h60\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\financial_only_ridge_prior_h60\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 444932,
+      "mtime_ns": 1792835595655951100,
+      "sha256": "d94556c0105da65ab4855ddf20f1c121cac9e151fcf8c3efcd3983ab21bc6e63"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\financial_only_ridge_prior_h60\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\financial_only_ridge_prior_h60\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 445026,
+      "mtime_ns": 1792835597450725700,
+      "sha256": "1f436c8e293f70c09847102106f9c7f579a9aeb1f22860893f3092ab7c81f6b8"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_lightgbm_h20\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_lightgbm_h20\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 455511,
+      "mtime_ns": 1792835768820994500,
+      "sha256": "a4969fedf86be96492d9796a896fc52a9d1447368b6ac67f8d14cb1ba4407225"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_lightgbm_h20\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_lightgbm_h20\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 455018,
+      "mtime_ns": 1792835770959213500,
+      "sha256": "40682c483e942f3e279738697da1f14638a09333a2f29b1c37a58dd42823d6aa"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_ridge_prior_h20\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_ridge_prior_h20\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 453837,
+      "mtime_ns": 1792835462004135600,
+      "sha256": "4ff191bbec7700fe74faa5d95f7d3472166b9eb59b2ab4681d9aaecbab235fb8"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_ridge_prior_h20\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_ridge_prior_h20\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 453452,
+      "mtime_ns": 1792835463841627200,
+      "sha256": "8be4a9b5da54863ee2a396fa8f76275eb4b97ef646b19e9ab9b82fe7cfccfab2"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_ridge_zero_h20\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_ridge_zero_h20\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454975,
+      "mtime_ns": 1792835317054905600,
+      "sha256": "5b8c78c866d74fd5ee538d4bfa94f20b4099bd948612e285a71d64d75052c06c"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_ridge_zero_h20\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_only_ridge_zero_h20\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 455267,
+      "mtime_ns": 1792835318884398900,
+      "sha256": "3fddd830323aba9a539d10e36ba731f35915ec0111e2bdbadd8c87a5aa704991"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_lightgbm_h20\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_lightgbm_h20\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454962,
+      "mtime_ns": 1792835910640210800,
+      "sha256": "ab4c4cc80d69bbc40e55bdd437505effde34c326b64022f43e7df7fd12fbe154"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_lightgbm_h20\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_lightgbm_h20\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 455179,
+      "mtime_ns": 1792835914509971300,
+      "sha256": "c692dded71543c2502aad08d4e7feed6af83953ba8ad00dfb594b273ca8ac9a0"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_ridge_prior_h20\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_ridge_prior_h20\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454026,
+      "mtime_ns": 1792835611128638300,
+      "sha256": "818a856b09479fe2c70323a61de70029d06b4a9cdaf12d37815835527d6ad098"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_ridge_prior_h20\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_ridge_prior_h20\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 454727,
+      "mtime_ns": 1792835612753453200,
+      "sha256": "0f49567c21fc7e49bc9cf00da476dd60e9bf92748f2ea5aaae877a6d0ed33818"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_ridge_zero_h20\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_ridge_zero_h20\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454301,
+      "mtime_ns": 1792835467748218200,
+      "sha256": "956b223b6591e002317ee9853bdf54b7c88daccfeb783a8eb699309d20196228"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_ridge_zero_h20\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\price_plus_financial_ridge_zero_h20\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 454449,
+      "mtime_ns": 1792835469360974000,
+      "sha256": "dc14f228e8c37350ebf11506962fc14a7523be10fd5d18e81e7f4967140e2f0d"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\residual_momentum\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\residual_momentum\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 453274,
+      "mtime_ns": 1792835145485474800,
+      "sha256": "f9bfcb3eacac7b408a3ab6fd11bbff968c1fe3507ab95e80e59e55ea556525f7"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\residual_momentum\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\residual_momentum\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 453164,
+      "mtime_ns": 1792835144429236500,
+      "sha256": "71b1d99bc5bbba6ce20835e4cb227c5f99524b01571ca860f91dc76520953187"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\training_icir_ensemble\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\training_icir_ensemble\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 455257,
+      "mtime_ns": 1792835949496227800,
+      "sha256": "5a50ee438f77ac347d077a79a8f5bed0156248a3f9b9b677aff1df120970bd08"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\replays\\training_icir_ensemble\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\replays\\training_icir_ensemble\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 455473,
+      "mtime_ns": 1792835950454290700,
+      "sha256": "5597f1cc9c6f2e5b5fcb7c31f0dd22f0a47210a078d13ced7fa8aaa6a4696364"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\completion.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\completion.json",
+      "size_bytes": 78,
+      "mtime_ns": 1792838246927701800,
+      "sha256": "f5f03b90d0beadb747d2024f22e58b0b46c5f4964e0d420907fda04ed4da186d"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\performance.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\performance.csv",
+      "size_bytes": 5149,
+      "mtime_ns": 1792838246708448000,
+      "sha256": "e385a457844f18f613ac4f91765ff12d01491b00453f5befab7f2a248302b5b0"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\top2000_equal_weight_price_only\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\top2000_equal_weight_price_only\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 484440,
+      "mtime_ns": 1792838241726509700,
+      "sha256": "17bbc855c6b4e298be6dc6e44628a20ad76d049699dcca97baa37ff9dd73156a"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\top2000_equal_weight_price_only\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\top2000_equal_weight_price_only\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 487768,
+      "mtime_ns": 1792838243232980700,
+      "sha256": "8619035cd01faa220ddf07ee292f8241673938c84991c7490b82a20c2f2b5986"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\top2000_residual_momentum\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\top2000_residual_momentum\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 485255,
+      "mtime_ns": 1792838227580119200,
+      "sha256": "a1a9c3bc5d0488a5acb801d913ea962130bcdc7e859a6c68d6f18370f7777608"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\top2000_residual_momentum\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\top2000_residual_momentum\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 486146,
+      "mtime_ns": 1792838230179188900,
+      "sha256": "56c33cdf2a53ab1b0a60eee1326ba3f0d07f379c29d473b1f28c503dc1d004a0"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\top500_equal_weight_price_only\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\top500_equal_weight_price_only\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 456031,
+      "mtime_ns": 1792837972441494100,
+      "sha256": "44eba021ab0f7e8a476c4c1c336f97a8e95dede487ffc8822ac5e808451bfb45"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\top500_equal_weight_price_only\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\top500_equal_weight_price_only\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 456786,
+      "mtime_ns": 1792837972717641000,
+      "sha256": "c8eb45e34fe756a75cd2d8b49bb0e2f9d50d2c14bc7175013723a5ac886d715b"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\top500_residual_momentum\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\top500_residual_momentum\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 456783,
+      "mtime_ns": 1792837970736923000,
+      "sha256": "5a71093501dcb401c3329e2a502e9c3ceb4803965383aadd00b5d05f8dc33b08"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\replays\\top500_residual_momentum\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\replays\\top500_residual_momentum\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 456195,
+      "mtime_ns": 1792837969304758200,
+      "sha256": "5322098a530559e76f6b43001a8dd6be618f7fb03a2b18d4c3784ac28b500a9e"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\prior_model\\replays\\completion.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\prior_model\\replays\\completion.json",
+      "size_bytes": 63,
+      "mtime_ns": 1792838566032477600,
+      "sha256": "820b17440f1a6fd84ca54f4ba22a03e545d7f9221ac32e2363f9b4a5d298ec42"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\prior_model\\replays\\performance.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\prior_model\\replays\\performance.csv",
+      "size_bytes": 1879,
+      "mtime_ns": 1792838565716035900,
+      "sha256": "b3551a728b54d6e56dc2435cd2228eb6c0e11de4e2b32c80094449db2b1dafe9"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\prior_model\\replays\\top2000_ridge_prior\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\prior_model\\replays\\top2000_ridge_prior\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 486863,
+      "mtime_ns": 1792838562236229400,
+      "sha256": "080e95b5634a775ed81d07033d9415ddeb00354a93f11ba17ca927cc3be567f1"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\prior_model\\replays\\top2000_ridge_prior\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\prior_model\\replays\\top2000_ridge_prior\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 489511,
+      "mtime_ns": 1792838561003460600,
+      "sha256": "f1eac1651751ee81ded2bf3734d5d5d3e698d19054f81c443ef506b18ae57f7b"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\completion.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\completion.json",
+      "size_bytes": 65,
+      "mtime_ns": 1792837381612215600,
+      "sha256": "fd939de934acde76c79d7c79b8b06a836758c1d0251edad5ea1f14927c2b82f4"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\performance.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\performance.csv",
+      "size_bytes": 10481,
+      "mtime_ns": 1792837381411351700,
+      "sha256": "0a5fea0b4751d568930d11409ef2d6ce19d54d9fef64a5146e4c534fc78cd91e"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_DISPERSION\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_DISPERSION\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 453620,
+      "mtime_ns": 1792836929172119500,
+      "sha256": "5254eaf525d7fd93f6d7306d9ab9f368358055d2f7fa0d26c8cfd1dc15c20f73"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_DISPERSION\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_DISPERSION\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 452441,
+      "mtime_ns": 1792836929755491400,
+      "sha256": "c9599022cea2836a58e77a1fbf72ea4e69553c8dbb940a587b26731d1042606c"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_EPS_REVISION\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_EPS_REVISION\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454724,
+      "mtime_ns": 1792836781788023000,
+      "sha256": "d97ea059d2cfb280014a429dc419694a3b35a28aaa7c333f701898ab28ce7309"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_EPS_REVISION\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_EPS_REVISION\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 454738,
+      "mtime_ns": 1792836781967692100,
+      "sha256": "d1ccb0c0a516d79577a73d2880713948c1c6f45f29479327aa2f7bd1f2d54b17"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_REVISION_BREADTH\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_REVISION_BREADTH\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 453702,
+      "mtime_ns": 1792836781804023700,
+      "sha256": "01b36933669a40948c7fe6f6168b910501d7c1812d85b666ee62f3f94cec18a2"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_REVISION_BREADTH\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_REVISION_BREADTH\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 454876,
+      "mtime_ns": 1792836781652772800,
+      "sha256": "b50abbe2163815ae1996d662cad7b442a28914fbe008fc0966c690bda32c79a0"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_SUE_PRICE_SCALED\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_SUE_PRICE_SCALED\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 453701,
+      "mtime_ns": 1792837089836432300,
+      "sha256": "825fea8d9bb2717f2e38c1c63aa7c5abc4e1bcdca5a1afa26750cbb3b6d2dafd"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_SUE_PRICE_SCALED\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_SUE_PRICE_SCALED\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 454306,
+      "mtime_ns": 1792837090437856500,
+      "sha256": "b0c0308c15304aacbb8877b024de0015a974f18fb0f53f507a7b7ac246ffd979"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_TARGET_IMPLIED_RETURN\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_TARGET_IMPLIED_RETURN\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454632,
+      "mtime_ns": 1792836932699502900,
+      "sha256": "e3bbb550501fac96a4123a34e73792fbdbf836f61cac725b76ff1ddb97f8ccf9"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_TARGET_IMPLIED_RETURN\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\IBES_TARGET_IMPLIED_RETURN\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 454552,
+      "mtime_ns": 1792836932895622900,
+      "sha256": "3821cd304cee4273b0dd2b867365ae3a21368fb8d1715cb734719568c211f070"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_CONTRACTS_PER_MILLION_SHARES\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_CONTRACTS_PER_MILLION_SHARES\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 452290,
+      "mtime_ns": 1792837379230604600,
+      "sha256": "b0b089c93adf81d09a4a277ebc85f92d054af3515f2b8e73d787536c8673ac2f"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_CONTRACTS_PER_MILLION_SHARES\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_CONTRACTS_PER_MILLION_SHARES\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 452544,
+      "mtime_ns": 1792837380644814700,
+      "sha256": "1e898855997464a7cb1a5421ef46eaebfac7e30e0224cc9528081e2a4ba8bafe"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_CP50_IV_DIFF\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_CP50_IV_DIFF\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454097,
+      "mtime_ns": 1792837242739716900,
+      "sha256": "97371a55e06dd86993f9b28a0bcb490295d00676e3cf8c7f860550d3f7f04dc1"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_CP50_IV_DIFF\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_CP50_IV_DIFF\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 454410,
+      "mtime_ns": 1792837244240806200,
+      "sha256": "ffa033baf1ee65b490105cef625bef95cc25fa1e1cedcac11ea7ca50b69127c3"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_IV_MINUS_RV\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_IV_MINUS_RV\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454573,
+      "mtime_ns": 1792837247544532300,
+      "sha256": "7f9e8e8de9fd39170140fcaf475294e6c0dfd189c3c80f838cf5ddd022b4cd74"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_IV_MINUS_RV\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_IV_MINUS_RV\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 455381,
+      "mtime_ns": 1792837248785047600,
+      "sha256": "4376712459c9ad0542116d827b20c832b00cc0d239886543acb116af7401d9fc"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_PUT25_SKEW\\cost_1x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_PUT25_SKEW\\cost_1x\\daily_pnl.parquet",
+      "size_bytes": 454680,
+      "mtime_ns": 1792837094473731100,
+      "sha256": "9c27c10b2f465fd7ee2fb4285bc92ec1c82bcafd41c86e32da7dabcb8e84bee3"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_PUT25_SKEW\\cost_2x\\daily_pnl.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\replays\\OPTION_PUT25_SKEW\\cost_2x\\daily_pnl.parquet",
+      "size_bytes": 455102,
+      "mtime_ns": 1792837094105264700,
+      "sha256": "79636706dd15de6e325e044522d117dc6d464dbd961b8671ca4bbb814891f4d8"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\books\\equal_weight_price_only.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\books\\equal_weight_price_only.parquet",
+      "size_bytes": 7854007,
+      "mtime_ns": 1792834975768979600,
+      "sha256": "7596e8640c5bb9533346b5a8e61e4b25276499775e027f0abb3acd53bed40dca"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\books\\equal_weight_price_plus_financial.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\books\\equal_weight_price_plus_financial.parquet",
+      "size_bytes": 7854832,
+      "mtime_ns": 1792834976127567600,
+      "sha256": "b743dcb3af30d70e9eaece020a56bd13cbb0fd8d2a6d96a10a992ed2f68678dd"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\books\\residual_momentum.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\books\\residual_momentum.parquet",
+      "size_bytes": 2892829,
+      "mtime_ns": 1792834975432460700,
+      "sha256": "d18c64301ae3abb17b9fcacc30e1f0a73b1ceeefdb4c933f0dd318b1c574e71a"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\books\\training_icir_ensemble.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\books\\training_icir_ensemble.parquet",
+      "size_bytes": 12718303,
+      "mtime_ns": 1792834977088257800,
+      "sha256": "b328481464dc2241f0f21434f79dbba49717ea162f4511f7ca3f88e78884a137"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\books\\top2000_equal_weight_price_only.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\books\\top2000_equal_weight_price_only.parquet",
+      "size_bytes": 53428670,
+      "mtime_ns": 1792837822758513500,
+      "sha256": "968c41df38d03910ac3d7481d75c104b228e78863a58b645f736bd9c9ea4bbf0"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\books\\top2000_residual_momentum.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\books\\top2000_residual_momentum.parquet",
+      "size_bytes": 24602131,
+      "mtime_ns": 1792837821670770200,
+      "sha256": "cd5898543cab8f4c1e578af376f9ed4c0f647b3473d5f277b320213a80fda094"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\books\\top500_equal_weight_price_only.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\books\\top500_equal_weight_price_only.parquet",
+      "size_bytes": 13513166,
+      "mtime_ns": 1792837811294030500,
+      "sha256": "6b637c1ece7668e1495960dfabad04b2e2ede26aefc3d8372b4488f2a706f660"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\books\\top500_residual_momentum.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\books\\top500_residual_momentum.parquet",
+      "size_bytes": 3286359,
+      "mtime_ns": 1792837811004663100,
+      "sha256": "0063bf806acac9ee8789a0b5967313c90282b9fa4ad559f93d27deeb18346166"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_DISPERSION.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_DISPERSION.parquet",
+      "size_bytes": 2646981,
+      "mtime_ns": 1792836621808838500,
+      "sha256": "3a91b2c2c707abae588c9260d0bd7350a3134184e18e7aee0257480a7ceab1dd"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_EPS_REVISION.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_EPS_REVISION.parquet",
+      "size_bytes": 2082596,
+      "mtime_ns": 1792836620994411300,
+      "sha256": "bb8f041a3dcdd60c07fda264e680b2ac187b39706755552a13499bb04ba5d060"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_REVISION_BREADTH.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_REVISION_BREADTH.parquet",
+      "size_bytes": 2543828,
+      "mtime_ns": 1792836620282409400,
+      "sha256": "b4719d51a593f0e8d83e60b896ade85ae0517a6831b475efcaed0f471cb0b1a9"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_SUE_PRICE_SCALED.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_SUE_PRICE_SCALED.parquet",
+      "size_bytes": 3059255,
+      "mtime_ns": 1792836623434470800,
+      "sha256": "c18f2e8419c169647c4e2ce85b620ea6dcb43a2616cd250f1aeadd9587734a07"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_TARGET_IMPLIED_RETURN.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\IBES_TARGET_IMPLIED_RETURN.parquet",
+      "size_bytes": 2660134,
+      "mtime_ns": 1792836622648423500,
+      "sha256": "054be184df3c0cf0c4581a94a5a78dd4ec67075d4af431e3c8ca2642573785f0"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\OPTION_CONTRACTS_PER_MILLION_SHARES.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\OPTION_CONTRACTS_PER_MILLION_SHARES.parquet",
+      "size_bytes": 2778010,
+      "mtime_ns": 1792836627281496800,
+      "sha256": "fc62322d400066403b09cfc9a075a3a17a4741a86b9e8f7666645f571fe7cf19"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\OPTION_CP50_IV_DIFF.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\OPTION_CP50_IV_DIFF.parquet",
+      "size_bytes": 2776733,
+      "mtime_ns": 1792836625279097200,
+      "sha256": "4780ca07693c7389f401051cd7bd3b335168df9124c84690a0b2d2a5eb119c19"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\OPTION_IV_MINUS_RV.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\OPTION_IV_MINUS_RV.parquet",
+      "size_bytes": 2760496,
+      "mtime_ns": 1792836626213823300,
+      "sha256": "1d3fb1d0d9d4753e3585ab9bd0ff9234dd08c4e2451375d48a3f2ee0db2e4520"
+    },
+    "data\\wrds\\batch4\\alternative_features_20261024\\books\\OPTION_PUT25_SKEW.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\alternative_features_20261024\\books\\OPTION_PUT25_SKEW.parquet",
+      "size_bytes": 2772281,
+      "mtime_ns": 1792836624340199200,
+      "sha256": "4ea2ed3c7b2af9f2becc6a09f9042301b152989fa1555afa1eebbc6ee8cb9f15"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\models\\financial_only\\ridge_prior\\h120\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\models\\financial_only\\ridge_prior\\h120\\oof.parquet",
+      "size_bytes": 20642561,
+      "mtime_ns": 1792834475084567600,
+      "sha256": "537f94da74040b638a27facd464338b9ebc0b9fe6ec35bbf8c394f940eafd7fb"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\models\\financial_only\\ridge_prior\\h60\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\models\\financial_only\\ridge_prior\\h60\\oof.parquet",
+      "size_bytes": 20886011,
+      "mtime_ns": 1792834446775883000,
+      "sha256": "c3340f7f45054fe88b732422cdf32651328557e624155298d5d1420d2bcadb7f"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\models\\price_only\\lightgbm\\h20\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\models\\price_only\\lightgbm\\h20\\oof.parquet",
+      "size_bytes": 18575990,
+      "mtime_ns": 1792834524313181800,
+      "sha256": "2d0086b3c69a38640c285c34fea76b9f6fa63543e7763cf474b78199ef1b5e90"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\models\\price_only\\ridge_prior\\h20\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\models\\price_only\\ridge_prior\\h20\\oof.parquet",
+      "size_bytes": 21052363,
+      "mtime_ns": 1792834411677483600,
+      "sha256": "57c0ded81f37d45546710d4d455044aca4066320c90450e2729fb21992caf30e"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\models\\price_only\\ridge_zero\\h20\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\models\\price_only\\ridge_zero\\h20\\oof.parquet",
+      "size_bytes": 21052555,
+      "mtime_ns": 1792834411313406700,
+      "sha256": "0133aa7a4dc0a078c3d90504b7f6c1ab575985d9893660064a112320561dd986"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\models\\price_plus_financial\\lightgbm\\h20\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\models\\price_plus_financial\\lightgbm\\h20\\oof.parquet",
+      "size_bytes": 18872652,
+      "mtime_ns": 1792834557086869600,
+      "sha256": "e394cdb2dd848d3530747874e765c6537f650213642cef7ca714df1a1c22200f"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\models\\price_plus_financial\\ridge_prior\\h20\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\models\\price_plus_financial\\ridge_prior\\h20\\oof.parquet",
+      "size_bytes": 21052705,
+      "mtime_ns": 1792834456885389500,
+      "sha256": "c7ee297eac35070202bfe57d6b290ab8ee2db36cd816678c361be4e72de98656"
+    },
+    "data\\wrds\\batch4\\prior_study_20261024\\models\\price_plus_financial\\ridge_zero\\h20\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\prior_study_20261024\\models\\price_plus_financial\\ridge_zero\\h20\\oof.parquet",
+      "size_bytes": 21052721,
+      "mtime_ns": 1792834413436148000,
+      "sha256": "6e3cc66464b7317dcbd218f749b22aefa5dc59808ef3c5272d918c7d756e1dbc"
+    },
+    "data\\wrds\\batch4\\broad_research_20261024\\prior_model\\oof.parquet": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch4\\broad_research_20261024\\prior_model\\oof.parquet",
+      "size_bytes": 81231642,
+      "mtime_ns": 1792838309678082300,
+      "sha256": "cb7a8f84d2bdc675c124609a81470d9313f5ac3b3bcccde6cb9b38659f784003"
+    }
+  },
+  "assets": {
+    "all_performance.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\all_performance.csv",
+      "size_bytes": 28767,
+      "mtime_ns": 1792838669068502100,
+      "sha256": "fce4b23f6323c61caf99a25ac89028204e13bd79c7d3f4de8ff95f331ee2e141"
+    },
+    "alternative_ic.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\alternative_ic.csv",
+      "size_bytes": 4098,
+      "mtime_ns": 1792838674895580000,
+      "sha256": "fae36211c845ec74ff45295348338c4ea23d2a45cc5201c64e506d106e7f3ba8"
+    },
+    "benchmark_ic.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\benchmark_ic.csv",
+      "size_bytes": 406,
+      "mtime_ns": 1792838681415093000,
+      "sha256": "e1b1153a49de13852ec31b2b0403eb26b060379e31fa7aba46d3fc74f260880c"
+    },
+    "coefficient_recovery_audit.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\coefficient_recovery_audit.csv",
+      "size_bytes": 3481,
+      "mtime_ns": 1792833657296956900,
+      "sha256": "36ef6259f7ec6f125e9737d061832e919c9e6affb2d911f897f3ee58194c2b06"
+    },
+    "ledger_verification.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\ledger_verification.csv",
+      "size_bytes": 4546,
+      "mtime_ns": 1792838669069505500,
+      "sha256": "66d1b02f5ee707bef2864310d83f1afae6194038b310f37f457063e19d7f89e6"
+    },
+    "model_ic.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\model_ic.csv",
+      "size_bytes": 1044,
+      "mtime_ns": 1792838674898581800,
+      "sha256": "92c2a1f2137b4136e8147a84dfdfb39f404a0faad550b47e7e72f4691e8ec465"
+    },
+    "paired_bootstrap.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\paired_bootstrap.csv",
+      "size_bytes": 4194,
+      "mtime_ns": 1792838674045108600,
+      "sha256": "774dd39702ceb3ff4c524a3f287f61ca3de48b58c8fc4321e3962948b428a0eb"
+    },
+    "ridge_coefficients_actual.png": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\ridge_coefficients_actual.png",
+      "size_bytes": 163794,
+      "mtime_ns": 1792833658013834900,
+      "sha256": "d9f3de720ca3347b11ef07fa2b8dd42a25651a8457088f2e48d2fcc3ee41dd1c"
+    },
+    "ridge_coefficients_by_fold.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\ridge_coefficients_by_fold.csv",
+      "size_bytes": 144638,
+      "mtime_ns": 1792833657295956000,
+      "sha256": "56d634ee4dcf45d1ffb2809328c7ced13aadcc90f0f862df34d89b8ead53800f"
+    },
+    "ridge_coefficient_stability.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\ridge_coefficient_stability.csv",
+      "size_bytes": 19433,
+      "mtime_ns": 1792833657333958600,
+      "sha256": "8a22304a74bbbbd5d866c27e5ccce33ec8fd7e90bea12d3f2ecd9cd2b79d821c"
+    },
+    "ridge_sign_stability.png": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\ridge_sign_stability.png",
+      "size_bytes": 184748,
+      "mtime_ns": 1792838674676579700,
+      "sha256": "9694d493c9c00fed4fb2f565ed4115157fffacbff0862768a4c7c9fa6dcde9fd"
+    },
+    "score_diagnostics.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\score_diagnostics.csv",
+      "size_bytes": 11600,
+      "mtime_ns": 1792833349013730800,
+      "sha256": "5a4ce70284a94c1f0548404f57e60b8ecc8a4f3380c1c63e61166171cdf7ca25"
+    },
+    "size_ic.png": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\size_ic.png",
+      "size_bytes": 64560,
+      "mtime_ns": 1792838674883579300,
+      "sha256": "098cf25a04e31a4ea08cf39345bd74a50104b5ccaed3fefcac2795ecbfedd9fe"
+    },
+    "size_stratified_ic.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\size_stratified_ic.csv",
+      "size_bytes": 1579,
+      "mtime_ns": 1792838674679581000,
+      "sha256": "6a9d24a3f7ecda17f2387d16d4acc7f36d7e10bf147f3fd4efc53d7d77f3e914"
+    },
+    "training_fold_summary.csv": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\training_fold_summary.csv",
+      "size_bytes": 5817,
+      "mtime_ns": 1792838659312552400,
+      "sha256": "65b579cbc7905bf29d045cd22db50280582e1449bfb8dbd9d1ae3b7efdc7b756"
+    },
+    "verification.json": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\research_extensions_20261024\\verification.json",
+      "size_bytes": 1083,
+      "mtime_ns": 1792838681434094800,
+      "sha256": "ace08d7bba62f369f10bc3da56a9360ad37d98ad3de00dcb04eebca0a4055f0d"
+    }
+  },
+  "final_source_snapshot": "data\\wrds\\batch4\\final_source_snapshot",
+  "source_hashes": {
+    "scripts\\report_wrds_extensions.py": "d7711c54b93a54af142b87b2ef1dce4e9b7cef1926bec3710721d600529c6614",
+    "config\\wrds_research_extensions.yaml": "a0e72cb9dc4871ae96e610139cdd29164acb31e88e7caa0b3405050173a7dffc",
+    "scripts\\acquire_wrds_extensions.py": "cf20512127b353150fa43a2dde7dccf40474421b68dce6665ede642e76fadd9a",
+    "scripts\\acquire_wrds_alternative.py": "1df3aca0592840e015d629751ccd6a7862dfc3f95b46f6c5544e0754a966b801",
+    "scripts\\repair_wrds_ibes_basis.py": "e5096c8ccf74dadfdb2f2b9faeec531079085125843d7418f287ff7f50c90705",
+    "scripts\\repair_wrds_broad_terminal.py": "80039cdfae5aa1fecf6971f0de6f0c7ed8de7c7d0a85cb1f4360122fff2b862c",
+    "scripts\\build_wrds_broad_research.py": "382359a8f178ada392dd1ca02683ee5b3e05020dafe8ce0058cc208b631d830a",
+    "scripts\\build_wrds_alternative_features.py": "5a68262666dec6790bb15d788022737e16671aa8b02e2a9ff7dd4f03d5a69d4f",
+    "scripts\\diagnose_wrds_ml.py": "b8ccffb568c1126d3b8b4fa905c2de461eb352dc4206cdf226f70e2e267d608d",
+    "scripts\\research_wrds_priors.py": "80e4506cf6c88f0fdd49163b64c5677f3b9859b6deacee7815025b802e0a4361",
+    "scripts\\research_wrds_broad_prior.py": "8762b74c6f9cc5be06a2a9b0263d20d63e348be003777691ec747bf8b4cbc657",
+    "scripts\\replay_wrds_extensions.py": "bc742e61e492d5a5af9f580ade749657e57946e503cf701ee1fa4dc2dcbc87ff",
+    "scripts\\replay_wrds_alternative.py": "e38b47c1da1ea08567c9ab5b3019181e2f39d823f87e0fd31828e0e20e1ab7bb",
+    "quant_platform\\core\\data\\research_universe.py": "cab3df447a9544d8e92f65a8a59a122eeed412dc678380b261b661e362337cf7",
+    "quant_platform\\core\\data\\alternative_research.py": "546ac6cf797ab78d678da391b62fdeef1a766dcf15cb765bf3ccbd2a32d3e132",
+    "quant_platform\\core\\alpha_models\\prior_models.py": "540525053a6d2210f8b7a1afbdfabc16315620627f6129c9b40acf07cd352e1a",
+    "quant_platform\\core\\evaluation\\ml_diagnostics.py": "e462c1a8e0156ca90034d2e8fe3e5a0dcb5b744ddda19cea7858ff283d97c271",
+    "tests\\test_ml_diagnostics.py": "4e214fef93421983ec8991200200632edd424ea29339bd462f1f6b9ca23839c6",
+    "tests\\test_prior_models.py": "8dd7df7c2bd602d11aeafa6fa38481d17c7c75ba9e4259f1ac63edac2250f075",
+    "tests\\test_alternative_research.py": "23edf5bdd2701ab2ed3b259797afda5d8969994f0a831c8edc1601a516919522",
+    "tests\\test_broad_research_universe.py": "359e4d7fbea4283a0b2dbf59c2e786d11846fccbdd080aaa8f6183ce1ec2cb5b",
+    "tests\\test_extension_ensemble.py": "24b824cc19633ff7ca77cf400eb818fad85cb907079fa4e1622df00c5164dbbe"
+  },
+  "historical_review_not_untouched_holdout": true,
+  "production_admitted": false,
+  "snapshot_scope": "Final new-stage drivers and helpers; phase snapshots take precedence where recorded. Not a claim of an entire environment snapshot."
+}

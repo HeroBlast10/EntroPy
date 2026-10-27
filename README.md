@@ -301,6 +301,12 @@ The separate `config/ibkr_paper_order_preview.yaml` enables a readwrite client
 while retaining dry-run and disabled order submission; broker permissions and
 actual order execution require separate verification.
 
+The ETF-to-equity workflow adds cost-aware research, next-session-open weekly
+replays, explicit weight artifacts, durable order intents and currency-aware
+reconciliation. Run `python scripts/ibkr_workflow.py daily --profile etf --refresh`
+or use `--profile equity`; both are read-only by default. See
+[IBKR workflow and operating boundaries](docs/ibkr_workflow.md).
+
 ## Testing
 
 ```bash

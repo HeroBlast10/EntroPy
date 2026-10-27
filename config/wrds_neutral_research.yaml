@@ -1,0 +1,29 @@
+base_config: config/wrds_batch2.yaml
+output: data/wrds/batch3/neutral_2013_2025
+research:
+  oos_start: '2013-01-01'
+  validation_days: 252
+  min_train_days: 756
+  inner_days: 126
+  max_train_rows: 200000
+  n_jobs: 2
+  max_candidate_configurations: 16
+target:
+  volatility_window: 60
+  volatility_min_periods: 40
+  daily_volatility_floor: 0.005
+  clip: 3.0
+  min_industry_names: 5
+risk:
+  lookback: 252
+  min_observations: 126
+  specific_risk_floor: 0.01
+  halflife: 60
+  shrinkage: 0.5
+  target_volatility: 0.10
+  gross_limit: 1.0
+  expected_alpha_annual: 0.10
+  risk_aversion: 3.0
+  turnover_cost_bps: 10.0
+  forecast_horizon: 20
+  ema_halflife: 5

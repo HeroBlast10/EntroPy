@@ -63,9 +63,13 @@ def main():
     parser.add_argument('--ib-config', type=Path, default=ROOT/'config/ibkr_paper.yaml')
     parser.add_argument('--research-config', type=Path, default=ROOT/'config/ibkr_daily_research.yaml')
     parser.add_argument('--offline', action='store_true', help='Re-analyse the saved vendor caches.')
+    parser.add_argument('--port', type=int, choices=[4002, 7497], help='Override paper Gateway/TWS port.')
     args = parser.parse_args()
     research = yaml.safe_load(args.research_config.read_text(encoding='utf-8'))
     cfg = load_paper_config(args.ib_config)
+    if args.port is not None:
+        cfg.ib.port = args.port
+        cfg.ib.validate()
     cfg.ib.readonly = True
     cfg.strategy.dry_run = True
     cfg.strategy.enable_paper_orders = False

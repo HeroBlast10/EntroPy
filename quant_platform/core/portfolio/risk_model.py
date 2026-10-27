@@ -33,9 +33,12 @@ class FactorRiskModel:
         Ledoit-Wolf shrinkage intensity [0, 1] (default 0.5)
     """
 
-    def __init__(self, halflife: int = 60, shrinkage: float = 0.5):
+    def __init__(self, halflife: int = 60, shrinkage: float = 0.5, min_observations: int = 20):
         self.halflife = halflife
         self.shrinkage = shrinkage
+        if min_observations < 2:
+            raise ValueError("min_observations must be at least two")
+        self.min_observations = min_observations
         
         # Factor covariance
         self.cov_matrix_: Optional[np.ndarray] = None
@@ -50,7 +53,8 @@ class FactorRiskModel:
         self.factor_returns_: Optional[pd.DataFrame] = None
 
     @staticmethod
-    def build_structural_factors(stock_returns: pd.DataFrame, market_caps: pd.DataFrame) -> pd.DataFrame:
+    def build_structural_factors(stock_returns: pd.DataFrame, market_caps: pd.DataFrame,
+                                 eligibility: Optional[pd.DataFrame] = None) -> pd.DataFrame:
         """Market and SMB returns independent of the candidate alpha.
 
         Size is equal-weight small minus big, split at the lagged cross-section
@@ -59,9 +63,13 @@ class FactorRiskModel:
         Sector excess returns are added by fit(). No value factor is invented
         when point-in-time fundamentals are unavailable.
         """
-        returns = stock_returns.replace([np.inf, -np.inf], np.nan).sort_index()
-        caps = market_caps.sort_index().reindex(columns=returns.columns)
+        returns = stock_returns.replace([np.inf, -np.inf], np.nan).sort_index().astype(float)
+        caps = market_caps.sort_index().reindex(columns=returns.columns).astype(float)
         log_caps = np.log(caps.where(caps > 0)).shift(1).reindex(returns.index)
+        if eligibility is not None:
+            eligible = eligibility.reindex(index=returns.index, columns=returns.columns).fillna(False).astype(bool)
+            returns = returns.where(eligible)
+            log_caps = log_caps.where(eligible)
         ranks = log_caps.rank(axis=1, method="average", pct=True)
         factors = pd.DataFrame(index=returns.index)
         factors["market"] = returns.mean(axis=1)
@@ -77,6 +85,19 @@ class FactorRiskModel:
         """
         factors = factor_returns.copy()
         if sector_map is None or sector_map.empty:
+            return factors
+        if "date" in sector_map:
+            if sector_map.duplicated(["date", "ticker"]).any():
+                raise ValueError("sector_map must have unique date/ticker keys")
+            mapping = sector_map.pivot(index="date", columns="ticker", values="sector").reindex(
+                index=stock_returns.index, columns=stock_returns.columns)
+            if (stock_returns.notna() & mapping.isna()).any().any():
+                raise ValueError("Dated sector_map is incomplete for observed returns")
+            sectors = sorted(pd.unique(mapping.to_numpy().ravel()), key=str)
+            sectors = [s for s in sectors if pd.notna(s)]
+            market = factors.get("market", stock_returns.mean(axis=1))
+            for sector in sectors[1:]:
+                factors[f"sector:{sector}"] = stock_returns.where(mapping.eq(sector)).mean(axis=1) - market
             return factors
         if sector_map["ticker"].duplicated().any():
             raise ValueError("sector_map must have one row per ticker")
@@ -157,41 +178,30 @@ class FactorRiskModel:
         stock_ret = stock_returns.loc[common_dates]
         factor_ret = factor_returns.loc[common_dates]
         
-        exposures = []
-        intercepts = {}
-        
-        for ticker in stock_ret.columns:
-            aligned = pd.concat(
-                [stock_ret[ticker].rename("_stock"), factor_ret], axis=1
-            ).replace([np.inf, -np.inf], np.nan).dropna()
-            if len(aligned) < 20:
-                continue
-            y = aligned["_stock"]
-            X = aligned[factor_ret.columns]
-            
-            # OLS regression: y = X @ beta + epsilon
-            try:
-                # Add intercept
-                X_with_const = np.column_stack([np.ones(len(X)), X.values])
-                beta = np.linalg.lstsq(X_with_const, y.values, rcond=None)[0]
-                intercepts[ticker] = float(beta[0])
-                
-                # Store betas (exclude intercept)
-                exposure_dict = {"ticker": ticker}
-                for i, factor_name in enumerate(factor_ret.columns):
-                    exposure_dict[factor_name] = beta[i + 1]
-                
-                exposures.append(exposure_dict)
-            except np.linalg.LinAlgError:
-                logger.warning("Regression failed for {}", ticker)
-                continue
-        
-        self.intercepts_ = pd.Series(intercepts, dtype=float)
-        if not exposures:
+        x = factor_ret.to_numpy(dtype=float, na_value=np.nan)
+        y = stock_ret.to_numpy(dtype=float, na_value=np.nan)
+        valid = np.isfinite(y) & np.isfinite(x).all(axis=1)[:, None]
+        coefficients = np.full((x.shape[1] + 1, y.shape[1]), np.nan)
+        # Securities with identical observed dates share one least-squares
+        # factorization. This preserves pairwise missingness and makes daily
+        # historical fits practical without imputing missing stock returns.
+        if y.shape[1]:
+            _, membership = np.unique(np.packbits(valid, axis=0).T, axis=0, return_inverse=True)
+            for group in np.unique(membership):
+                columns = np.flatnonzero(membership == group)
+                mask = valid[:, columns[0]]
+                if mask.sum() < self.min_observations:
+                    continue
+                design = np.column_stack([np.ones(mask.sum()), x[mask]])
+                coefficients[:, columns] = np.linalg.lstsq(design, y[np.ix_(mask, columns)], rcond=None)[0]
+        usable = np.isfinite(coefficients).all(axis=0)
+        names = stock_ret.columns[usable]
+        self.intercepts_ = pd.Series(coefficients[0, usable], index=names, dtype=float)
+        if not len(names):
             return pd.DataFrame()
-        
-        exp_df = pd.DataFrame(exposures).set_index("ticker")
-        return exp_df
+        result = pd.DataFrame(coefficients[1:, usable].T, index=names, columns=factor_ret.columns)
+        result.index.name = "ticker"
+        return result
     
     def _estimate_factor_covariance(self, factor_returns: pd.DataFrame) -> np.ndarray:
         """Estimate factor covariance matrix with EWMA and shrinkage.
@@ -211,7 +221,7 @@ class FactorRiskModel:
         weights /= weights.sum()
 
         # Weighted sample covariance
-        data = clean_returns.values
+        data = clean_returns.to_numpy(dtype=float, na_value=np.nan)
         mean = np.average(data, axis=0, weights=weights)
         centered = data - mean
         sample_cov = (centered.T * weights) @ centered
@@ -242,39 +252,15 @@ class FactorRiskModel:
         stock_ret = stock_returns.loc[common_dates]
         factor_ret = factor_returns.loc[common_dates]
         
-        specific_risks = {}
-        
-        for ticker in exposures.index:
-            if ticker not in stock_ret.columns:
-                continue
-            
-            aligned = pd.concat(
-                [stock_ret[ticker].rename("_stock"), factor_ret], axis=1
-            ).replace([np.inf, -np.inf], np.nan).dropna()
-            if len(aligned) < 2:
-                continue
-            y = aligned["_stock"]
-            X = aligned[factor_ret.columns]
-            
-            # Get exposures for this stock
-            betas = exposures.loc[ticker].values
-            
-            # Predicted return from factors
-            intercept = (
-                float(self.intercepts_.get(ticker, 0.0))
-                if self.intercepts_ is not None
-                else 0.0
-            )
-            y_pred = intercept + X.values @ betas
-            
-            # Residuals
-            residuals = y.values - y_pred
-            
-            # Specific risk = std(residuals), annualized
-            specific_vol = np.std(residuals, ddof=1) * np.sqrt(252)
-            specific_risks[ticker] = specific_vol
-        
-        return pd.Series(specific_risks)
+        names = exposures.index.intersection(stock_ret.columns)
+        if not len(names):
+            return pd.Series(dtype=float)
+        x = factor_ret.to_numpy(dtype=float, na_value=np.nan)
+        residuals = stock_ret[names].to_numpy(dtype=float, na_value=np.nan) - x @ exposures.loc[names].to_numpy().T
+        intercept = self.intercepts_.reindex(names).fillna(0).to_numpy() if self.intercepts_ is not None else 0.0
+        residuals = residuals - intercept
+        residuals[~np.isfinite(residuals)] = np.nan
+        return pd.Series(np.nanstd(residuals, axis=0, ddof=1) * np.sqrt(252), index=names)
     
     def predict_risk(self, weights: pd.Series) -> float:
         """Predict portfolio variance given weight vector.
@@ -331,6 +317,9 @@ class FactorRiskModel:
         if self.exposures_ is None or self.specific_risk_ is None:
             raise RuntimeError("Must call fit() first.")
         
+        weights = pd.to_numeric(weights, errors="raise").astype(float)
+        if not np.isfinite(weights).all():
+            raise ValueError("Risk weights must be finite")
         active_weights = weights[weights.abs() > 1e-12]
         missing = active_weights.index.difference(
             self.exposures_.index.intersection(self.specific_risk_.index)
@@ -359,16 +348,14 @@ class FactorRiskModel:
             }
         
         # 1. Portfolio factor exposures = weighted average of stock exposures
-        portfolio_exposures = (w.values[:, None] * self.exposures_.loc[common_tickers].values).sum(axis=0)
+        portfolio_exposures = (w.to_numpy(dtype=float)[:, None] * self.exposures_.loc[common_tickers].to_numpy(dtype=float)).sum(axis=0)
         
         # 2. Factor risk = portfolio_exposures' @ factor_cov @ portfolio_exposures
         factor_variance = portfolio_exposures @ self.cov_matrix_ @ portfolio_exposures
         
         # 3. Specific risk = Σ(weight_i² × specific_risk_i²)
-        specific_variance = 0.0
-        for ticker in common_tickers:
-            if ticker in self.specific_risk_.index:
-                specific_variance += w[ticker]**2 * self.specific_risk_[ticker]**2
+        specific = self.specific_risk_.reindex(common_tickers).to_numpy(dtype=float)
+        specific_variance = float(np.sum((w.to_numpy(dtype=float) * specific) ** 2))
         
         # 4. Total risk
         total_variance = factor_variance + specific_variance

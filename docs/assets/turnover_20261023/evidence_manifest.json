@@ -1,0 +1,104 @@
+{
+  "stage": "turnover_report",
+  "generated_at_utc": "2026-10-23T13:31:01+00:00",
+  "code": {
+    "git_head": "e94ed5d77d7d739ed68074fa287c7f1bad1a8f81",
+    "git_dirty": true,
+    "scope": [
+      "tracked working tree"
+    ],
+    "reproducible_from_commit": false,
+    "python": "3.12.7",
+    "platform": "Windows-10-10.0.19045-SP0"
+  },
+  "packages": {
+    "numpy": "1.26.4",
+    "pandas": "2.2.2",
+    "pyarrow": "16.1.0",
+    "scipy": "1.13.1",
+    "scikit-learn": "1.5.1",
+    "lightgbm": "4.6.0",
+    "torch": "2.7.0+cu128",
+    "numba": "0.60.0"
+  },
+  "inputs": {
+    "driver": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\scripts\\report_wrds_turnover.py",
+      "size_bytes": 22144,
+      "mtime_ns": 1792762238137324000,
+      "sha256": "280f6b43234260dcec0d183802d2c3db82ca9f6d4245e56a92a17856e90b5887"
+    },
+    "recorded": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\turnover_optimization_20261023\\recorded_strategy_summary.csv",
+      "size_bytes": 48479,
+      "mtime_ns": 1792760779025623700,
+      "sha256": "49bd0c1f93e3215e54b14a599cb01c5c4ff6ebd0177304907cf1714a8f3b9770"
+    },
+    "replay": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\turnover_optimization_20261023\\replay_summary.csv",
+      "size_bytes": 42305,
+      "mtime_ns": 1792762063844254700,
+      "sha256": "8bc4ccc8967fac2252e8f526a0d5f93bbcb45d9952ad445a671aae3e374787c9"
+    },
+    "stress": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\turnover_optimization_20261023_stress\\replay_summary.csv",
+      "size_bytes": 15665,
+      "mtime_ns": 1792761748157195100,
+      "sha256": "d6a31613feed89d23650e4df58b922e8bce1fa35526857587bd2790d8b401279"
+    },
+    "base_plan": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\turnover_optimization_20261023\\experiment_plan.json",
+      "size_bytes": 20328,
+      "mtime_ns": 1792760696247365500,
+      "sha256": "9eb4ba733d17680ed2f80dbab97b7d7219b5eb7a962c3d8123c471f35ba0bdd1"
+    },
+    "stress_plan": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\turnover_optimization_20261023_stress\\experiment_plan.json",
+      "size_bytes": 20223,
+      "mtime_ns": 1792760836747348900,
+      "sha256": "9ad8e9ec23017fe36c09ba0e5f0819f25aa85da5312992b9b11501b552a132a8"
+    },
+    "ic_labels": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\model_comparison\\total_loss\\full\\h20\\oof.parquet",
+      "size_bytes": 35791096,
+      "mtime_ns": 1792502737467240500,
+      "sha256": "3462db8434ff1304cb1e2a8eab5024a8437239f0fcd1d835882a4427c1bd2744"
+    },
+    "ic_table": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\turnover_optimization_20261023\\score_ic_comparison.csv",
+      "size_bytes": 1506,
+      "mtime_ns": 1792762261856402400,
+      "sha256": "b0d9aa7bf3eb96018b10c31b2c41a60475971d2ef6a7b82c68ac1e077b7a03f6"
+    },
+    "verification": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\turnover_optimization_20261023\\artifact_verification.json",
+      "size_bytes": 27648,
+      "mtime_ns": 1792762245481788400,
+      "sha256": "89992dcc3c8d60998b7d2b487ca1adf86f773749ef2fdda3e60ffb913200d19a"
+    },
+    "micro_orders": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch2\\turnover_optimization_20261023\\micro_order_diagnostics.csv",
+      "size_bytes": 57898,
+      "mtime_ns": 1792762245489823700,
+      "sha256": "0853c5085975e19422741dee915aef053cdec7401623cd6dab036520acd84a8b"
+    },
+    "chart": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\turnover_20261023\\factor_nav.png",
+      "size_bytes": 509062,
+      "mtime_ns": 1792762246284590000,
+      "sha256": "9d40f9aa13934a6da5f76b998a10e7318aa2bf3b227f5c8d57b4bd0360293f88"
+    },
+    "document": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\TURNOVER_OPTIMIZATION_2026-10-23.md",
+      "size_bytes": 18758,
+      "mtime_ns": 1792762261857402400,
+      "sha256": "0d4a629020943119f7a1379b9c94c9d829dd80685a824081410c65f2c4287630"
+    }
+  },
+  "params": {
+    "recorded_books": 76,
+    "new_replays": 92,
+    "primary_variant": "combined",
+    "new_oos": false
+  }
+}

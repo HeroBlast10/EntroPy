@@ -1,0 +1,7 @@
+# Fixed surviving ETF pilot, not a historical point-in-time universe.
+symbols: [QQQ, IWM, EFA, EEM, IEF, TLT, GLD, DIA]
+benchmarks: [SPY]
+duration: "10 Y"
+min_price_usd: 5.0
+min_adv20_usd: 5000000.0
+output_dir: "data/research/ibkr_workflow/etf"

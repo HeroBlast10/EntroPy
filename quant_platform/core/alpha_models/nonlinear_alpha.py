@@ -38,6 +38,7 @@ class WalkForwardConfig:
     seed: int = 20260726
     min_cross_section: int = 20
     max_train_rows: Optional[int] = None
+    oos_start: Optional[str] = None
 
     def __post_init__(self) -> None:
         for name in ("horizon", "min_train_days", "validation_days", "n_splits"):
@@ -47,6 +48,8 @@ class WalkForwardConfig:
             raise ValueError("purge_days must be at least the forward-return horizon")
         if self.min_cross_section < 3:
             raise ValueError("min_cross_section must be at least 3")
+        if self.oos_start is not None and pd.isna(pd.to_datetime(self.oos_start, errors="coerce")):
+            raise ValueError("oos_start must be a valid date")
 
     @property
     def effective_purge_days(self) -> int:
@@ -358,6 +361,21 @@ def expanding_date_folds(
     """Yield contiguous, purged expanding folds keyed by unique trading date."""
 
     unique_dates = pd.DatetimeIndex(pd.to_datetime(pd.Index(dates).unique())).sort_values()
+    if config.oos_start is not None:
+        # Start at the earliest requested date supported by purged training;
+        # never back-anchor the start from the end or drop a final partial year.
+        first_validation = max(int(unique_dates.searchsorted(pd.Timestamp(config.oos_start))),
+                               config.min_train_days + config.effective_purge_days)
+        if first_validation >= len(unique_dates):
+            raise ValueError("No out-of-sample dates after the required training history")
+        for number, start in enumerate(range(first_validation, len(unique_dates), config.validation_days), 1):
+            train_dates = unique_dates[:start - config.effective_purge_days]
+            valid_dates = unique_dates[start:start + config.validation_days]
+            yield {"fold": number, "train_dates": train_dates, "validation_dates": valid_dates,
+                   "train_start": train_dates[0], "train_end": train_dates[-1],
+                   "validation_start": valid_dates[0], "validation_end": valid_dates[-1],
+                   "purge_days": config.effective_purge_days}
+        return
     required = (
         config.min_train_days
         + config.effective_purge_days

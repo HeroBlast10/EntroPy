@@ -1,0 +1,158 @@
+{
+  "stage": "long_history_label_risk_report",
+  "generated_at_utc": "2026-10-23T15:47:55+00:00",
+  "code": {
+    "git_head": "e94ed5d77d7d739ed68074fa287c7f1bad1a8f81",
+    "git_dirty": true,
+    "scope": [
+      "tracked working tree"
+    ],
+    "reproducible_from_commit": false,
+    "python": "3.12.7",
+    "platform": "Windows-10-10.0.19045-SP0"
+  },
+  "packages": {
+    "numpy": "1.26.4",
+    "pandas": "2.2.2",
+    "pyarrow": "16.1.0",
+    "scipy": "1.13.1",
+    "scikit-learn": "1.5.1",
+    "lightgbm": "4.6.0",
+    "torch": "2.7.0+cu128",
+    "numba": "0.60.0"
+  },
+  "inputs": {
+    "driver": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\scripts\\report_wrds_neutral.py",
+      "size_bytes": 36056,
+      "mtime_ns": 1792770427988916700,
+      "sha256": "7f91cec046a744f99b67357a7782df1e134e8b6288b575e8a13bc9cba22c7e20"
+    },
+    "report": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\NEUTRAL_LABELS_RISK_2026-10-23.md",
+      "size_bytes": 20433,
+      "mtime_ns": 1792770475699440100,
+      "sha256": "12bb8e8503b602307585e610cf6dfb22eac064207f6f9421ec2ac29ec7f5c78c"
+    },
+    "model_summary": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\model_summary.csv",
+      "size_bytes": 1222,
+      "mtime_ns": 1792764053201414400,
+      "sha256": "0f375c6f5ec0d4a8420a66a036b7fbb222f8e1df7a9f645d212e67dd3ce5e5b9"
+    },
+    "comparison": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\comparison_summary.csv",
+      "size_bytes": 43815,
+      "mtime_ns": 1792770456203498300,
+      "sha256": "7d056af8c59432b855d025a4bede38e2947d96ab017b6056465ffcbdaebf017f"
+    },
+    "paired": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\paired_comparisons.csv",
+      "size_bytes": 14169,
+      "mtime_ns": 1792770474475426300,
+      "sha256": "70fc3aae141f1b81416361ec6b9409cbd9b76fdfc7ecbe6dacb20a28fbf02c5d"
+    },
+    "verification": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\verification.json",
+      "size_bytes": 20275,
+      "mtime_ns": 1792770474480398300,
+      "sha256": "ff1bb34fde945fa6dcf355047ec4d71b81793390fb8ed9a303df8bd86a47281a"
+    },
+    "chart": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\docs\\assets\\neutral_risk_20261023\\long_history_nav.png",
+      "size_bytes": 501121,
+      "mtime_ns": 1792770475315223100,
+      "sha256": "c48cf4a2fa8fa0f52b9e1cf4362c347e52299f5f9cfb7d398692ab0a2e179631"
+    },
+    "ic_uncertainty": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\model_ic_uncertainty.csv",
+      "size_bytes": 1116,
+      "mtime_ns": 1792770466625564200,
+      "sha256": "720ae951ebdf396854032c3abbf5c3812555a2ebe12bf526e6c34b8e62808f90"
+    },
+    "uncertainty": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\sharpe_uncertainty.csv",
+      "size_bytes": 5004,
+      "mtime_ns": 1792770474474397400,
+      "sha256": "3268ef4c3bf61bbc9b0b025ef41dcfbf378db95d1a94bd52a5277296cf582a83"
+    },
+    "block_sensitivity": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\sharpe_block_sensitivity.csv",
+      "size_bytes": 11272,
+      "mtime_ns": 1792770472960104400,
+      "sha256": "b81a59af52182a3de88c69ca14fd1183920bee6058a520b421bbdae484754199"
+    },
+    "regimes": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\regime_comparison.csv",
+      "size_bytes": 24537,
+      "mtime_ns": 1792770474476396400,
+      "sha256": "6c4b690966b74cf7bf8c2aa1926e9562515220ac165ce6a5f31b5bae2ebd51e8"
+    },
+    "factor_attribution": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\factor_return_attribution.csv",
+      "size_bytes": 33446,
+      "mtime_ns": 1792770474479425500,
+      "sha256": "0ff72eb522408ac47bcb63322465295309558d596fc3ed218ee644b863c853ef"
+    },
+    "predictions:cross_sectional:price_only:ridge": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\models\\cross_sectional\\price_only\\ridge\\oof.parquet",
+      "size_bytes": 28589464,
+      "mtime_ns": 1792763714965522600,
+      "sha256": "33eb6b2ba82aefa9e923b1deb66c15ce67f1d4a6121237bf16cc5d9d74d15da0"
+    },
+    "predictions:cross_sectional:price_plus_financial:ridge": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\models\\cross_sectional\\price_plus_financial\\ridge\\oof.parquet",
+      "size_bytes": 28589610,
+      "mtime_ns": 1792763716560409700,
+      "sha256": "efe8f05b638fcc0d7706c1839511b18ad7671d24026af61983ccf5b0fdfd4914"
+    },
+    "predictions:industry_size_vol:price_only:ridge": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\models\\industry_size_vol\\price_only\\ridge\\oof.parquet",
+      "size_bytes": 28597234,
+      "mtime_ns": 1792763764657996100,
+      "sha256": "bfa9d87f76c48845d9f741dbd5609cd0e890ca8e97daab09c1dc5d665f0ab7c6"
+    },
+    "predictions:industry_size_vol:price_plus_financial:ridge": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\models\\industry_size_vol\\price_plus_financial\\ridge\\oof.parquet",
+      "size_bytes": 28596950,
+      "mtime_ns": 1792763816088735100,
+      "sha256": "c55f05dd6d7fc90715502361b5564024cb7f715c75c1b43890388593736e4aaa"
+    },
+    "predictions:cross_sectional:price_only:lightgbm": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\models\\cross_sectional\\price_only\\lightgbm\\oof.parquet",
+      "size_bytes": 28589228,
+      "mtime_ns": 1792763896456278500,
+      "sha256": "561bb8171465154762a7f90d4bba2951ec5592056288934de308025b59cf54b6"
+    },
+    "predictions:cross_sectional:price_plus_financial:lightgbm": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\models\\cross_sectional\\price_plus_financial\\lightgbm\\oof.parquet",
+      "size_bytes": 28589760,
+      "mtime_ns": 1792763918992334700,
+      "sha256": "6783c7a482d9c0fe1e862959aaa8f111ebee608cf96b433a51d7d1b1c3a65267"
+    },
+    "predictions:industry_size_vol:price_only:lightgbm": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\models\\industry_size_vol\\price_only\\lightgbm\\oof.parquet",
+      "size_bytes": 28597422,
+      "mtime_ns": 1792763957326073400,
+      "sha256": "cfb249f2cf039660ea7e5e7685d06527b779e33d5d961c425215141db984c1f4"
+    },
+    "predictions:industry_size_vol:price_plus_financial:lightgbm": {
+      "path": "E:\\Jupyter notebook\\EntroPy\\data\\wrds\\batch3\\neutral_2013_2025\\models\\industry_size_vol\\price_plus_financial\\lightgbm\\oof.parquet",
+      "size_bytes": 28597320,
+      "mtime_ns": 1792764049429429100,
+      "sha256": "c06bca2b77252c6daed9130510c578d7e51ba34cc46b1c9bd23f4e18fe1132ec"
+    }
+  },
+  "params": {
+    "bootstrap_block": 60,
+    "bootstrap_repetitions": 1500,
+    "seed": 2718,
+    "sensitivity_block_lengths": [
+      20,
+      60,
+      126
+    ],
+    "historical_review_not_untouched_holdout": true,
+    "production_admitted": false
+  }
+}

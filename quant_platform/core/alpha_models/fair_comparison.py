@@ -30,7 +30,8 @@ def inner_time_masks(panel, fold, inner_days):
 
 
 def fit_predict(panel, features, train_mask, test_mask, *, model, params, seeds,
-                max_rows=200000, n_jobs=4, sampling_features=None, sampling_tiebreak_features=None):
+                max_rows=200000, n_jobs=4, sampling_features=None, sampling_tiebreak_features=None,
+                sampling_reference_col="target", training_indices=None):
     sampling_features=list(features if sampling_features is None else sampling_features)
     tiebreak=list(sampling_features if sampling_tiebreak_features is None else sampling_tiebreak_features)
     if any(is_metadata(c) for c in [*features,*sampling_features,*tiebreak]):
@@ -41,10 +42,20 @@ def fit_predict(panel, features, train_mask, test_mask, *, model, params, seeds,
     # All information blocks use the same secondary keys. After price/target
     # ties, differing financial rows must not fall back to ticker/input order.
     # A remaining exact tie has identical predictors and target in every block.
-    sort_keys=list(dict.fromkeys(["date",*sampling_features,"target",*tiebreak]))
-    canonical=panel.iloc[ids][sort_keys].reset_index(drop=True).sort_values(
-        sort_keys,kind="mergesort").index
-    ids=_sample_training_rows(ids[canonical],max_rows,int(seeds[0]))
+    sort_keys=list(dict.fromkeys(["date",*sampling_features,sampling_reference_col,*tiebreak]))
+    if training_indices is None:
+        canonical=panel.iloc[ids][sort_keys].reset_index(drop=True).sort_values(
+            sort_keys,kind="mergesort").index
+        ids=_sample_training_rows(ids[canonical],max_rows,int(seeds[0]))
+    else:
+        chosen=np.asarray(training_indices)
+        if chosen.dtype.kind not in "iu" or (chosen<0).any() or (chosen>=len(panel)).any():
+            raise ValueError("Invalid predeclared training indices")
+        if len(np.unique(chosen))!=len(chosen) or not np.asarray(train_mask)[chosen].all():
+            raise ValueError("Predeclared training rows violate the purged mask")
+        if max_rows is not None and len(chosen)>max_rows:
+            raise ValueError("Predeclared training rows exceed the sampling budget")
+        ids=chosen
     test_ids=np.flatnonzero(test_mask)
     x=panel.iloc[ids][features].to_numpy(dtype=np.float32)
     y=panel.iloc[ids].target.to_numpy(dtype=np.float32)
@@ -72,7 +83,8 @@ def fit_predict(panel, features, train_mask, test_mask, *, model, params, seeds,
 
 def nested_oof(panel, feature_blocks, directions, settings, *, horizon, frozen_choices=None):
     wf=WalkForwardConfig(horizon=horizon,min_train_days=settings["min_train_days"],
-        validation_days=settings["validation_days"],n_splits=settings["n_splits"])
+        validation_days=settings["validation_days"],n_splits=settings["n_splits"],
+        oos_start=settings.get("oos_start"))
     trials,choices,parts,importance_rows,fold_rows=[],{},[],[],[]
     label_end=pd.to_datetime(panel.label_end)
     common_tiebreak=list(dict.fromkeys(c for cols in feature_blocks.values() for c in cols))

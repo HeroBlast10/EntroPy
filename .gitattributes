@@ -1,0 +1,23 @@
+* text=auto eol=lf
+
+# Research manifests hash exact file bytes; disable newline conversion for evidence.
+docs/assets/** -text whitespace=cr-at-eol
+docs/NEUTRAL_LABELS_RISK_2026-10-23.md -text whitespace=cr-at-eol
+docs/RESEARCH_EXTENSIONS_2026-10-24.md -text whitespace=cr-at-eol
+docs/TURNOVER_OPTIMIZATION_2026-10-23.md -text whitespace=cr-at-eol
+
+# Matplotlib SVG path formatting includes harmless line-end whitespace.
+docs/assets/**/*.svg -whitespace
+
+# Frozen source snapshots below contain CRLF bytes recorded in historical hashes.
+quant_platform/core/signals/cross_sectional/liquidity.py -text whitespace=cr-at-eol
+quant_platform/core/signals/cross_sectional/momentum.py -text whitespace=cr-at-eol
+quant_platform/core/signals/cross_sectional/volatility.py -text whitespace=cr-at-eol
+quant_platform/core/signals/evaluation/regime.py -text whitespace=cr-at-eol
+quant_platform/core/signals/evaluation/relative_value.py -text whitespace=cr-at-eol
+quant_platform/core/signals/regime/hmm_regime.py -text whitespace=cr-at-eol
+scripts/wrds_ingest/__init__.py -text whitespace=cr-at-eol
+scripts/wrds_ingest/probe.py -text whitespace=cr-at-eol
+scripts/wrds_ingest/universe.py -text whitespace=cr-at-eol
+scripts/wrds_pull.py -text whitespace=cr-at-eol
+scripts/wrds_setup_auth.py -text whitespace=cr-at-eol

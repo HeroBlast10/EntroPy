@@ -1,0 +1,12 @@
+strategy_id: equity_multifactor_v1
+kind: equity
+research_config: config/ibkr_equity_research.yaml
+capital_usd: 12000.0
+gross_weight: 0.20
+max_weight: 0.10
+top_k: 5
+cost_bps: 10.0
+minimum_fee_usd: 1.0
+min_trade_usd: 50.0
+holdout_sessions: 252
+execution_window_seconds: 45

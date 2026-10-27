@@ -292,6 +292,11 @@ python scripts/ibkr_daily_research.py --offline
 独立的 `config/ibkr_paper_order_preview.yaml` 使用读写客户端，仍保持
 dry run 和自动提交关闭；券商权限与实际下单需单独验证。
 
+新增 ETF 到个股多因子的统一流程，包含成本回测、次日开盘与每周调仓、显式权重、
+持久化订单意图及按币种对账。使用
+`python scripts/ibkr_workflow.py daily --profile etf --refresh`，或切换
+`--profile equity`；默认均为只读。详见 [IBKR 运行说明](docs/ibkr_workflow.md)。
+
 ## 测试
 
 ```bash

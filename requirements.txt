@@ -5,6 +5,7 @@ pandas>=2.0.0
 pyarrow>=14.0.0
 numpy>=1.24.0
 scipy>=1.11.0
+osqp>=1.0,<2
 pyyaml>=6.0
 
 # --- Market Data (US) ---

@@ -1,0 +1,30 @@
+{
+  "cohorts": 8,
+  "folds": 13,
+  "prediction_rows_per_cohort": 1584035,
+  "sessions": 3148,
+  "oos_start": "2013-06-27",
+  "oos_end": "2025-12-31",
+  "prediction_key_sha256": "bccfb8e568b5ab416863a71e56737b567420c720a3313369b9e6beaa7025a917",
+  "nested_label_end_purge_verified": true,
+  "signed_coefficient_refits": 52,
+  "max_recovered_prediction_error": 0,
+  "ensemble_cash_guard_change_max_score_difference": 0,
+  "ensemble_all_nonpositive_weight_rows": 0,
+  "alternative_feature_availability_columns_checked": 9,
+  "source_point_in_time_proven": false,
+  "terminal_supplement_hash_verified": true,
+  "shared_crsp_return_audit": {
+    "shared_rows": 2903815,
+    "both_finite_returns": 2900853,
+    "max_return_error": 0.0,
+    "terminal_flag_disagreements": 0,
+    "original_sp_terminal_rows": 233,
+    "shared_terminal_rows": 233
+  },
+  "replays_verified": 52,
+  "previous_frozen_source_checks": 147,
+  "pytest_summary": "520 passed, 48 warnings in 116.04s (0:01:56)",
+  "corrected_broad_terminal_rows": 9315,
+  "no_new_strategy_admitted": true
+}

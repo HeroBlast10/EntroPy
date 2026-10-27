@@ -14,12 +14,13 @@ RESERVED = frozenset("""date ticker permno permco gvkey cusip ncusip sic siccd
 exchcd source vintage data_source is_point_in_time fundamentals_is_point_in_time
 membership_is_point_in_time membership_source available_date publish_date rdq
 datadate forward_return target prediction fold label_end is_tradable is_terminal
+decision_industry decision_log_size raw_target training_target
 """.split())
 
 
 def is_metadata(name: str) -> bool:
     key = name.lower()
-    return (key in RESERVED or key.startswith(("label_", "source_", "pit_", "membership_"))
+    return (key in RESERVED or key.startswith(("label_", "source_", "pit_", "membership_", "risk_", "target_"))
             or key.endswith(("_is_point_in_time", "_available_date", "_vintage", "_source")))
 
 

@@ -46,6 +46,7 @@ _TRADE_COLUMNS = [
     "fill_status",
     "requested_participation",
     "executed_participation",
+    "suppressed_notional",
 ]
 
 _COST_COLUMNS = [
@@ -79,6 +80,7 @@ def generate_trades(
     max_participation_rate: Optional[float] = None,
     tradable_today: Optional[pd.Series] = None,
     min_adv_shares: float = 0.0,
+    target_tolerance: float = 0.0,
 ) -> pd.DataFrame:
     """Convert target-minus-actual weights into executable orders.
 
@@ -91,6 +93,8 @@ def generate_trades(
         raise ValueError("capital must be finite and positive")
     if max_participation_rate is not None and not 0 < max_participation_rate <= 1:
         raise ValueError("max_participation_rate must be in (0, 1]")
+    if not np.isfinite(target_tolerance) or not 0 <= target_tolerance < 1:
+        raise ValueError("target_tolerance must be in [0, 1)")
 
     target = pd.to_numeric(weights_today, errors="coerce").fillna(0.0)
     actual = (
@@ -144,6 +148,7 @@ def generate_trades(
     trades["requested_shares"] = requested
     trades["shares"] = requested
     trades["fill_status"] = "filled"
+    trades["suppressed_notional"] = 0.0
     trades.loc[~valid_price, ["requested_shares", "shares"]] = 0.0
     trades.loc[~valid_price, "fill_status"] = "rejected_missing_price"
 
@@ -173,6 +178,15 @@ def generate_trades(
         tradable = tradable_today.reindex(trades["ticker"]).fillna(False).to_numpy(dtype=bool)
         trades.loc[~tradable, "shares"] = 0.0
         trades.loc[~tradable, "fill_status"] = "rejected_not_tradable"
+    # A zero target, new entry or sign reversal always bypasses the band.
+    # Suppressed candidates are audit records, never submitted orders or fills.
+    inside_band = (
+        trades.weight_to.mul(trades.weight_from).gt(0)
+        & trades.delta_weight.abs().le(target_tolerance * trades.weight_to.abs())
+    ) if target_tolerance else pd.Series(False, index=trades.index)
+    trades.loc[inside_band, "suppressed_notional"] = trades.loc[inside_band, "notional_trade"]
+    trades.loc[inside_band, ["requested_shares", "shares", "notional_trade"]] = 0.0
+    trades.loc[inside_band, "fill_status"] = "suppressed_tolerance"
     denom = trades["adv_shares"].where(trades["adv_shares"].gt(0))
     trades["requested_participation"] = trades["requested_shares"] / denom
     trades["executed_participation"] = trades["shares"] / denom
@@ -271,6 +285,7 @@ def _generate_residual_trades(
     max_participation_rate: Optional[float],
     tradable_today: Optional[pd.Series] = None,
     min_adv_shares: float = 0.0,
+    target_tolerance: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Generate orders only for ticker-level residual instructions."""
     tickers = pending.index
@@ -302,8 +317,53 @@ def _generate_residual_trades(
         max_participation_rate=max_participation_rate,
         tradable_today=tradable_today,
         min_adv_shares=min_adv_shares,
+        target_tolerance=target_tolerance,
     )
     return orders, active_pending
+
+
+def _allocate_tranche_fills(current, desired, executed):
+    """Net opposing sleeve instructions internally, then allocate actual fills.
+
+    Internal transfers have zero external turnover/cost. Unfilled external
+    quantities are cancelled at this close; that sleeve revisits them on its
+    next scheduled decision. No synthetic fill is credited to total holdings.
+    """
+    change = desired - current
+    buys, sells = change.clip(lower=0), -change.clip(upper=0)
+    total_buy, total_sell = buys.sum(), sells.sum()
+    cross = np.minimum(total_buy, total_sell)
+    internal_buy = buys.mul(cross.div(total_buy.replace(0, np.nan)).fillna(0), axis=1)
+    internal_sell = sells.mul(cross.div(total_sell.replace(0, np.nan)).fillna(0), axis=1)
+    remaining = change - internal_buy + internal_sell
+    net = remaining.sum()
+    ratio = executed.reindex(net.index, fill_value=0).div(net.replace(0, np.nan)).fillna(0)
+    if ((ratio < -1e-9) | (ratio > 1 + 1e-9)).any():
+        raise ValueError("Tranche fill exceeds the net instruction")
+    return current + internal_buy - internal_sell + remaining.mul(ratio.clip(0, 1), axis=1)
+
+
+def _attach_order_sources(orders, previous_target, source, is_rebalance, tranches):
+    """Exact cost allocation using aligned directional instruction components."""
+    for name in ("signal", "boundary", "drift_resize", "lot_residual"):
+        orders[f"source_{name}_fraction"] = 0.0
+    if not is_rebalance:
+        orders["source_lot_residual_fraction"] = 1.0
+        return orders
+    labels = orders.ticker.map(source).fillna("signal")
+    if tranches > 1:
+        for name in ("signal", "boundary", "drift_resize"):
+            orders[f"source_{name}_fraction"] = labels.eq(name).astype(float)
+        return orders
+    prior = orders.ticker.map(previous_target).fillna(0.0)
+    direction = np.sign(orders.delta_weight)
+    changed = (direction * (orders.weight_to - prior)).clip(lower=0)
+    gap = (direction * (prior - orders.weight_from)).clip(lower=0)
+    fraction = changed.div((changed + gap).replace(0, np.nan)).fillna(0)
+    for name in ("signal", "boundary", "drift_resize"):
+        orders[f"source_{name}_fraction"] = fraction * labels.eq(name)
+    orders["source_drift_resize_fraction"] += 1 - fraction
+    return orders
 
 
 def simulate_execution(
@@ -315,6 +375,9 @@ def simulate_execution(
     vol_lookback: int = 20,
     return_daily_ledger: bool = False,
     missing_terminal_return: str = "raise",
+    target_tolerance: float = 0.0,
+    tranche_count: int = 1,
+    target_policy=None,
 ) -> Union[pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
     """Simulate fills and PnL under a close-target convention.
 
@@ -332,6 +395,18 @@ def simulate_execution(
     at least max(5, adv_lookback//2) observations. Lookbacks shorter than five
     use a five-day window. With participation enforcement enabled, orders
     also require ADV >= cost_model.min_adv_shares.
+
+    ``target_tolerance`` suppresses same-side target gaps within a relative
+    band, including residual retries. Exits/entries/sign changes bypass it.
+    With ``tranche_count>1``, day zero seeds all sleeves, then one sleeve is
+    refreshed per day using NAV/H. Other sleeves drift with actual fills.
+    Daily universe exits apply to all sleeves. Tranche residuals are cancelled
+    at each close rather than retried against an aggregate stale dollar target.
+
+    Optional ``target_policy(date, rows, actual_weights, rebalance)`` returns
+    (target Series, scalar diagnostic dict). It observes marked ACTUAL holdings
+    before sizing orders. A policy may implement diagnose(date, weights) for
+    post-fill exposure checks. It must obtain estimates from prior data only.
     """
     if cost_model is None:
         cost_model = CostModel()
@@ -343,6 +418,12 @@ def simulate_execution(
         raise ValueError("adv_lookback must be positive")
     if initial_capital <= 0 or not np.isfinite(initial_capital):
         raise ValueError("initial_capital must be finite and positive")
+    if not np.isfinite(target_tolerance) or not 0 <= target_tolerance < 1:
+        raise ValueError("target_tolerance must be in [0, 1)")
+    if not isinstance(tranche_count, int) or isinstance(tranche_count, bool) or tranche_count < 1:
+        raise ValueError("tranche_count must be a positive integer")
+    if target_policy is not None and tranche_count != 1:
+        raise ValueError("A dynamic target policy cannot be combined with tranches")
     required_weights = {"date", "ticker", "weight"}
     required_prices = {"date", "ticker", "adj_close"}
     if missing := required_weights.difference(daily_weights.columns):
@@ -394,6 +475,7 @@ def simulate_execution(
         return (empty, ledger) if return_daily_ledger else empty
 
     positions = pd.Series(dtype=float)  # signed close-market values
+    tranche_positions = pd.DataFrame(index=range(tranche_count), dtype=float)
     last_target: Optional[pd.Series] = None
     pending_orders = _empty_pending_orders()
     nav_net = float(initial_capital)
@@ -402,6 +484,7 @@ def simulate_execution(
     peak_gross = nav_gross
     trade_frames: list[pd.DataFrame] = []
     ledger_rows: list[dict] = []
+    policy_targets: list[pd.DataFrame] = []
     terminated: set[str] = set()
     weight_groups = {dt: g for dt, g in dw.groupby("date", sort=False)}
 
@@ -409,6 +492,7 @@ def simulate_execution(
         if date_no and date_no % 1000 == 0:
             logger.info("Execution progress: {}/{} sessions, date={}", date_no, len(dates), dt.date())
         group = weight_groups[dt]
+        previous_target = last_target if last_target is not None else pd.Series(dtype=float)
         target = group.set_index("ticker")["weight"].sort_index()
         explicit_rebalance = (
             bool(group["is_rebalance"].fillna(False).astype(bool).any())
@@ -451,6 +535,10 @@ def simulate_execution(
             day_ret = day_ret.fillna(0.0)
             pnl_dollar = float((positions * day_ret).sum())
             positions = positions * (1.0 + day_ret)
+            if tranche_count > 1:
+                tranche_positions = tranche_positions.mul(
+                    1 + day_ret.reindex(tranche_positions.columns).fillna(0), axis=1
+                ).drop(columns=list(terminal_today), errors="ignore")
             # NAV already contains marked proceeds; removing dollar holdings
             # settles them into implicit cash without a second PnL or a trade.
             settlement_value = float(positions.reindex(held_terminal).sum())
@@ -480,6 +568,48 @@ def simulate_execution(
             raise RuntimeError(f"portfolio NAV became non-positive on {dt.date()}")
         actual_weights = positions / capital_before_trade
 
+        policy_diagnostics = {}
+        if target_policy is not None:
+            target, policy_diagnostics = target_policy(
+                date=dt, rows=group.loc[~group.ticker.isin(terminated)].copy(),
+                actual_weights=actual_weights.copy(), rebalance=is_rebalance,
+            )
+            if not isinstance(target, pd.Series) or target.index.has_duplicates or not np.isfinite(target).all():
+                raise ValueError("Dynamic policy must return unique finite target weights")
+            target = target.drop(index=list(terminated), errors="ignore")
+            last_target = target.copy()
+            if is_rebalance:
+                policy_targets.append(pd.DataFrame({"date": dt, "ticker": target.index, "weight": target.to_numpy()}))
+
+        suppressed_tranche_notional = 0.0
+        suppressed_tranche_count = 0
+        if tranche_count > 1:
+            if not is_rebalance:
+                raise ValueError("Overlapping tranches require daily rebalance instructions")
+            columns = tranche_positions.columns.union(target.index)
+            tranche_positions = tranche_positions.reindex(columns=columns, fill_value=0.0)
+            desired_tranches = tranche_positions.copy()
+            active = date_no % tranche_count
+            if date_no == 0:
+                desired_tranches.loc[:, :] = np.tile(
+                    target.reindex(columns, fill_value=0).to_numpy() * capital_before_trade / tranche_count,
+                    (tranche_count, 1),
+                )
+            else:
+                desired_tranches.loc[active] = target.reindex(columns, fill_value=0) * capital_before_trade / tranche_count
+            if target_tolerance:
+                gap = desired_tranches - tranche_positions
+                inside = desired_tranches.mul(tranche_positions).gt(0) & gap.abs().le(
+                    target_tolerance * desired_tranches.abs()
+                )
+                suppressed_tranche_notional = float(gap.where(inside, 0).abs().to_numpy().sum())
+                suppressed_tranche_count = int(inside.to_numpy().sum())
+                desired_tranches = desired_tranches.where(~inside, tranche_positions)
+            # Membership exits are mandatory even for an inactive sleeve.
+            eligible = set(group.loc[group.eligible.fillna(False), "ticker"]) if "eligible" in group else set(group.ticker)
+            desired_tranches.loc[:, ~desired_tranches.columns.isin(eligible)] = 0.0
+            target = desired_tranches.sum() / capital_before_trade
+
         trading_cost = 0.0
         requested_notional = 0.0
         executed_notional = 0.0
@@ -498,6 +628,7 @@ def simulate_execution(
                     max_participation_rate=cost_model.max_participation_rate,
                     tradable_today=tradable_series,
                     min_adv_shares=cost_model.min_adv_shares,
+                    target_tolerance=target_tolerance if tranche_count == 1 else 0.0,
                 )
                 prior_pending = None
             else:
@@ -511,8 +642,11 @@ def simulate_execution(
                     max_participation_rate=cost_model.max_participation_rate,
                     tradable_today=tradable_series,
                     min_adv_shares=cost_model.min_adv_shares,
+                    target_tolerance=target_tolerance,
                 )
             if not orders.empty:
+                source = group.set_index("ticker").transition_source if "transition_source" in group else pd.Series(dtype=object)
+                orders = _attach_order_sources(orders, previous_target, source, is_rebalance, tranche_count)
                 orders = _attach_costs(orders, cost_model)
                 orders.insert(0, "date", dt)
                 orders["is_rebalance_order"] = is_rebalance
@@ -529,6 +663,10 @@ def simulate_execution(
                 position_change = pd.Series(
                     signed_execution, index=orders["ticker"]
                 ).groupby(level=0).sum()
+                if tranche_count > 1:
+                    tranche_positions = _allocate_tranche_fills(
+                        tranche_positions, desired_tranches, position_change
+                    )
                 positions = positions.add(position_change, fill_value=0.0)
                 positions = positions[positions.abs() > 1e-8]
                 pending_orders = _residual_orders_after_fills(
@@ -538,6 +676,18 @@ def simulate_execution(
                 )
             else:
                 pending_orders = _empty_pending_orders()
+                if tranche_count > 1:
+                    tranche_positions = _allocate_tranche_fills(
+                        tranche_positions, desired_tranches, pd.Series(dtype=float)
+                    )
+
+        cancelled_tranche_residuals = len(pending_orders) if tranche_count > 1 else 0
+        if tranche_count > 1:
+            pending_orders = _empty_pending_orders()
+            np.testing.assert_allclose(
+                tranche_positions.sum().reindex(positions.index, fill_value=0), positions,
+                rtol=1e-10, atol=1e-7,
+            )
 
         nav_net = capital_before_trade - trading_cost
         if nav_net <= 0:
@@ -546,6 +696,8 @@ def simulate_execution(
         peak_net = max(peak_net, nav_net)
         peak_gross = max(peak_gross, nav_gross)
         actual_after = positions / nav_net
+        if target_policy is not None and hasattr(target_policy, "diagnose"):
+            policy_diagnostics = {**policy_diagnostics, **target_policy.diagnose(dt, actual_after)}
         ledger_rows.append(
             {
                 "date": dt,
@@ -558,6 +710,12 @@ def simulate_execution(
                 "borrow_cost_bps": borrow_cost / prev_nav * 10_000,
                 "requested_turnover": requested_notional / capital_before_trade,
                 "executed_turnover": executed_notional / capital_before_trade,
+                "one_way_turnover": 0.5 * executed_notional / capital_before_trade,
+                "suppressed_notional": suppressed_tranche_notional + (
+                    float(orders.suppressed_notional.sum()) if should_submit and not orders.empty else 0.0
+                ),
+                "suppressed_tranche_candidates": suppressed_tranche_count,
+                "cancelled_tranche_residuals": cancelled_tranche_residuals,
                 "nav_gross": nav_gross,
                 "nav_net": nav_net,
                 "drawdown_gross": nav_gross / peak_gross - 1.0,
@@ -570,6 +728,7 @@ def simulate_execution(
                 "terminal_settlement_value": settlement_value,
                 "terminal_return_imputations": terminal_imputations,
                 "missing_terminal_return_policy": missing_terminal_return,
+                **{f"risk_{key}": value for key, value in policy_diagnostics.items()},
             }
         )
 
@@ -585,6 +744,8 @@ def simulate_execution(
             raise ValueError("Ticker compatibility key maps to multiple PERMNOs")
         trades["permno"] = trades["ticker"].map(identity.set_index("ticker")["permno"])
     trades.attrs["daily_ledger"] = ledger
+    if policy_targets:
+        trades.attrs["target_history"] = pd.concat(policy_targets, ignore_index=True)
     if trades.empty:
         logger.warning("No trades generated across the backtest period")
     else:

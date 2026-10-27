@@ -1,0 +1,49 @@
+date_range: {history_start: '2008-01-01', research_start: '2010-01-01', end: '2025-12-31'}
+historical_review_not_untouched_holdout: true
+universe:
+  top_companies: 2000
+  diagnostic_top_companies: 3000
+  min_lagged_price: 5
+  min_lagged_adv_dollar: 2000000
+  adv_sessions: 20
+  min_listing_days: 60
+  rank_before_liquidity: true
+  one_share_class_per_company: true
+diagnostics:
+  old_run: data/wrds/batch3/neutral_2013_2025
+  ema_halflives: [5, 10, 20]
+  rank_update_threshold: 0.10
+  coefficient_zero_tolerance: 0.00001
+prior:
+  price_only: {RESID_MOM_12_1M: 1, MOM_12_1M: 1, IDIOVOL: -1}
+  price_plus_financial: {RESID_MOM_12_1M: 1, MOM_12_1M: 1, IDIOVOL: -1, GROSS_PROFITABILITY: 1, ACCRUALS: -1}
+model:
+  oos_start: '2013-01-01'
+  min_train_days: 756
+  validation_days: 252
+  inner_days: 126
+  date_stride: 5
+  normalized_prior_penalties: [0.01, 1, 100]
+  aligned_train_ic_t_threshold: 1.5
+  duplicates: {STR_1M: MOM_1M, ROLLING_SKEW_60D: SKEW_60D, ROLLING_KURT_60D: KURT_60D}
+  short_horizon_candidates: [STR_1W, STR_1M, KF_VELOCITY, OVERNIGHT_RET_21D]
+  financial_horizons: [60, 120]
+  lightgbm:
+    objective: huber
+    n_estimators: 1000
+    learning_rate: 0.03
+    num_leaves: 31
+    max_depth: 5
+    min_child_samples: 200
+    reg_lambda: 20
+    alpha: 0.9
+    early_stopping_rounds: 60
+    seed: 17
+  execution:
+    rebalance_sessions: 20
+    ema_halflife: 10
+    target_tolerance: 0.20
+    stock_limit: 0.015
+    issuer_limit: 0.03
+    initial_capital: 1000000
+    costs: [1, 2]

@@ -1,0 +1,7 @@
+# Fixed liquid current-symbol pilot. Price-based factors only; no PIT claim.
+symbols: [AAPL, MSFT, AMZN, GOOGL, JPM, XOM, JNJ, PG, KO, HD, WMT, CAT]
+benchmarks: [SPY]
+duration: "10 Y"
+min_price_usd: 5.0
+min_adv20_usd: 10000000.0
+output_dir: "data/research/ibkr_workflow/equity"
